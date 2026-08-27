@@ -30,7 +30,8 @@ support_dir = Path.expand("support", __DIR__)
   "test_endpoint.ex",
   "activity_log_assertions.ex",
   "data_case.ex",
-  "live_case.ex"
+  "live_case.ex",
+  "live_database_guard.ex"
 ]
 |> Enum.each(&Code.require_file(&1, support_dir))
 
@@ -39,6 +40,11 @@ alias PhoenixKitBilling.Test.Repo, as: TestRepo
 db_name =
   Application.get_env(:phoenix_kit_billing, TestRepo, [])[:database] ||
     "phoenix_kit_billing_test"
+
+# S014: refuse before anything else touches the database — see
+# PhoenixKitBilling.Test.LiveDatabaseGuard's moduledoc for why this exists
+# alongside (not instead of) the external `pk-test` wrapper.
+PhoenixKitBilling.Test.LiveDatabaseGuard.check!(db_name)
 
 db_check =
   try do
