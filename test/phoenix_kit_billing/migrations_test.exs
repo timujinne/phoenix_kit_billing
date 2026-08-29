@@ -66,6 +66,29 @@ defmodule PhoenixKitBilling.MigrationsTest do
       end
     end
 
+    # V1 shipped in 0.9.0. A host that has run it will never run it again,
+    # so editing it does not "fix" that host — it silently splits fresh
+    # installs from existing ones. This pins V1's published content so the
+    # split has to be deliberate: the four statements below are exactly
+    # what 0.9.0 executes, verified against the published tag's source.
+    test "V1's published statements are frozen" do
+      v1 = Migrations.v1_statements("public.", "public")
+
+      assert length(v1) == 4
+
+      normalised = Enum.map(v1, &(&1 |> String.replace(~r/\s+/, " ") |> String.trim()))
+
+      assert normalised == [
+               "CREATE TABLE IF NOT EXISTS public.phoenix_kit_payment_provider_configs ( \"provider\" character varying(20) NOT NULL, \"enabled\" boolean DEFAULT false NOT NULL, \"mode\" character varying(10) DEFAULT 'test'::character varying NOT NULL, \"api_key\" text, \"api_secret\" text, \"webhook_secret\" text, \"webhook_url\" character varying(255), \"last_verified_at\" timestamp with time zone, \"verification_status\" character varying(20) DEFAULT 'pending'::character varying, \"verification_error\" text, \"config\" jsonb DEFAULT '{}'::jsonb NOT NULL, \"inserted_at\" timestamp with time zone NOT NULL, \"updated_at\" timestamp with time zone NOT NULL, \"uuid\" uuid DEFAULT public.uuid_generate_v7() NOT NULL )",
+               "DO $$ BEGIN IF NOT EXISTS ( SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE c.conname = 'phoenix_kit_payment_provider_configs_pkey' AND t.relname = 'phoenix_kit_payment_provider_configs' AND n.nspname = 'public' ) THEN ALTER TABLE public.phoenix_kit_payment_provider_configs ADD CONSTRAINT phoenix_kit_payment_provider_configs_pkey PRIMARY KEY (uuid); END IF; END $$",
+               "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_payment_provider_configs_provider_uidx ON public.phoenix_kit_payment_provider_configs USING btree (provider)",
+               "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_payment_provider_configs_uuid_idx ON public.phoenix_kit_payment_provider_configs USING btree (uuid)"
+             ]
+
+      refute Enum.any?(v1, &String.starts_with?(&1, "COMMENT")),
+             "the marker is stamped by the chain for its TARGET version, not baked into V1"
+    end
+
     test "up stamps the version marker, and stamps it last" do
       statements = Migrations.up_statements()
 
