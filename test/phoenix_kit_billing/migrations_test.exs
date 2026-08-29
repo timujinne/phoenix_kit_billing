@@ -39,9 +39,72 @@ defmodule PhoenixKitBilling.MigrationsTest do
   end
 
   describe "the coordinator implements the protocol" do
+    alias PhoenixKit.Migrations.Postgres.Helpers
+
     test "current_version/0 and version_table/0" do
       assert Migrations.current_version() == 2
       assert Migrations.version_table() == "phoenix_kit_payment_provider_configs"
+    end
+
+    # The marker decides whether any LATER version ever runs: core's
+    # `classify/2` reads it and answers `:up_to_date` for every version at
+    # or below it. Stamping a version this chain does not have therefore
+    # skips V3 and everything after it, silently and permanently.
+    test "refuses to stamp a version this chain does not have" do
+      too_high = Migrations.current_version() + 1
+
+      assert_raise ArgumentError, ~r/has no version #{too_high}/, fn ->
+        Migrations.up_statements("public", too_high)
+      end
+
+      assert_raise ArgumentError, ~r/has no version #{too_high}/, fn ->
+        Migrations.down_statements("public", too_high)
+      end
+
+      # The ceiling itself stays reachable, or the guard would just break
+      # the chain instead of bounding it.
+      assert Migrations.up_statements("public", Migrations.current_version()) != []
+    end
+
+    # This chain embeds the prefix into three index NAMES, and Postgres
+    # TRUNCATES an identifier past 63 bytes silently rather than rejecting
+    # it — so a prefix core would refuse yields index names that differ
+    # from core's while every command still exits 0, breaking the contract
+    # adoption rests on. The rules are therefore core's, and this test
+    # compares against core rather than restating them: a local copy is
+    # exactly what drifted (upper case allowed, no length bound at all).
+    test "the prefix rules are core's, case and length included" do
+      for prefix <- [
+            "public",
+            "billing_alt",
+            "Billing",
+            "9leading_digit",
+            "has-dash",
+            String.duplicate("a", 20),
+            String.duplicate("a", 21),
+            String.duplicate("a", 30)
+          ] do
+        core_accepts =
+          try do
+            Helpers.validate_prefix!(prefix)
+            true
+          rescue
+            ArgumentError -> false
+          end
+
+        ours_accepts =
+          try do
+            Migrations.up_statements(prefix)
+            true
+          rescue
+            ArgumentError -> false
+          end
+
+        assert ours_accepts == core_accepts,
+               "prefix #{inspect(prefix)}: core #{if core_accepts, do: "accepts", else: "rejects"}, " <>
+                 "this chain #{if ours_accepts, do: "accepts", else: "rejects"} — the two must agree, " <>
+                 "or the index names this chain creates stop matching core's"
+      end
     end
 
     test "rejects a prefix that cannot be safely interpolated into DDL" do

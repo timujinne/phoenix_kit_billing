@@ -154,6 +154,7 @@ defmodule PhoenixKitBilling.Migrations do
   @spec up_statements(String.t(), non_neg_integer()) :: [String.t()]
   def up_statements(prefix \\ "public", target \\ @current_version)
       when is_integer(target) and target >= 0 do
+    validate_target!(target)
     prefix = validated_prefix(prefix: prefix)
     p = "#{prefix}."
 
@@ -896,6 +897,7 @@ defmodule PhoenixKitBilling.Migrations do
   @spec down_statements(String.t(), non_neg_integer()) :: [String.t()]
   def down_statements(prefix \\ "public", target \\ 0)
       when is_integer(target) and target >= 0 do
+    validate_target!(target)
     prefix = validated_prefix(prefix: prefix)
     p = "#{prefix}."
 
@@ -912,6 +914,24 @@ defmodule PhoenixKitBilling.Migrations do
       _ -> 0
     end
   end
+
+  # The marker is what every later run reads to decide whether it has
+  # anything to do, and nothing downstream sanity-checks the number: a
+  # marker of `pkb_schema:999` makes core's `classify/2` answer
+  # `:up_to_date` for V3, V4 and everything after, so the next real
+  # version is skipped SILENTLY and forever. Applying V2's body while
+  # stamping a version this chain does not have is therefore refused, in
+  # both directions. Core's codegen always passes `current_version/0`, so
+  # this only fires for a hand-written call — which is exactly the caller
+  # that has no other guard. Found in adversarial review.
+  defp validate_target!(target) when target > @current_version do
+    raise ArgumentError,
+          "PhoenixKitBilling.Migrations has no version #{target} " <>
+            "(current_version/0 is #{@current_version}); stamping it would make every " <>
+            "later version look already applied"
+  end
+
+  defp validate_target!(_target), do: :ok
 
   # `:version` is read from a keyword list AND from a map, because
   # `validated_prefix/1` accepts both — and a shape it accepts must not
@@ -935,9 +955,31 @@ defmodule PhoenixKitBilling.Migrations do
         _ -> "public"
       end
 
-    # Interpolated into DDL — same guard the projects/legal chains use.
-    unless prefix =~ ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/ do
-      raise ArgumentError, "invalid schema prefix: #{inspect(prefix)}"
+    # The prefix rules are CORE's, borrowed rather than restated. This
+    # chain embeds the prefix directly into three index NAMES (`pn`), and
+    # Postgres silently TRUNCATES an identifier past 63 bytes instead of
+    # rejecting it — so a prefix core would refuse produces index names
+    # that differ from core's while every command still exits 0, breaking
+    # the one contract adoption rests on: core's exact object names. The
+    # local regex used to be looser than core's in two ways found in
+    # adversarial review — it allowed upper case (core folds to lower, so
+    # existence checks compared against a literal that could never match)
+    # and had no length bound at all (core caps the prefix at 20 bytes,
+    # measured from the longest embedded name).
+    # `Code.ensure_loaded?` before `function_exported?`: the latter answers
+    # false for a module that simply has not been loaded yet, which under a
+    # release (and in `mix run --no-start`) is the normal state — the check
+    # would silently take the fallback branch and defeat its own purpose.
+    helpers = PhoenixKit.Migrations.Postgres.Helpers
+
+    if Code.ensure_loaded?(helpers) and function_exported?(helpers, :validate_prefix!, 1) do
+      helpers.validate_prefix!(prefix)
+    else
+      # Older core without the shared validator: apply core's documented
+      # rules here rather than the looser ones this chain shipped with.
+      unless prefix =~ ~r/^[a-z_][a-z0-9_]*$/ and byte_size(prefix) <= 20 do
+        raise ArgumentError, "invalid schema prefix: #{inspect(prefix)}"
+      end
     end
 
     prefix
