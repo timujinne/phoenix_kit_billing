@@ -10,35 +10,55 @@ defmodule PhoenixKitBilling.Migrations do
 
   ## Ownership situation — read before touching
 
-  `phoenix_kit_payment_provider_configs` is one of core's V135 baseline
-  tables. Nothing in this package's `lib/` reads or writes it today — it
-  is currently orphaned application-code-wise, though core still creates
-  it (and can still roll it back on its own baseline `down`). Payment
-  provider credentials this package actually reads and writes today live
-  in `phoenix_kit_settings`, via `PhoenixKitBilling.Providers` — this
-  version changes NONE of that.
+  All eleven `phoenix_kit_billing` tables are core baseline tables: core's
+  V135 created them, and later core versions have amended them (V162 added
+  `payment_option_uuid`, its FK and its index to `phoenix_kit_orders`; V164
+  added the `subscription_types` slug index). This chain ADOPTS that shape
+  table by table — it does not redesign it.
 
-  V1 is purely an ADOPTION step:
+  Adoption happens in two published versions, and each is frozen once
+  released:
 
-    * on existing installs the table is already there (core V135), the
-      `CREATE TABLE IF NOT EXISTS` finds it, and the only new object is
-      the `pkb_schema:1` marker — from then on this chain owns the
-      table's future shape;
-    * on a hypothetical future install whose core baseline no longer
-      creates the table, the same statements create it — shape-identical
-      to core's V135, with core's exact index and constraint names.
+    * **V1** — `phoenix_kit_payment_provider_configs` (shipped in 0.9.0).
+    * **V2** — the remaining ten: billing profiles, currencies, invoices,
+      orders, transactions, payment methods, subscriptions, webhook
+      events, payment options, subscription types.
 
-  Because V1 changes no shape, core's `ExpectedSchema` manifest (which
-  still audits the V135 shape of this table) stays accurate and NO core
-  release is required for this version. A version that DOES change shape
-  (V2+) is a separate, deliberate step — not in scope here.
+  Both are pure Phase-0 adoptions, and the property that makes them safe
+  is the same in both:
+
+    * on an existing install the tables are already there, every
+      `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` /
+      guarded `ADD CONSTRAINT` finds its object and does nothing, and the
+      only new object in the database is the version marker;
+    * on a future install whose core baseline no longer creates them, the
+      same statements create them — shape-identical to core's, under
+      core's exact index and constraint names.
+
+  Because neither version changes any shape, core's `ExpectedSchema`
+  manifest stays accurate and NO core release is required for either. A
+  version that DOES change a shape (V3+) is a separate, deliberate step
+  that first needs the changed objects added to core's manifest
+  `@excluded_exact` — not something to fold into an adoption.
+
+  Nothing in this package's `lib/` reads or writes
+  `phoenix_kit_payment_provider_configs` today; the payment-provider
+  credentials this package actually uses live in `phoenix_kit_settings`
+  via `PhoenixKitBilling.Providers`, and this chain changes NONE of that.
 
   ## What `down/1` is NOT
 
-  `down/1` unstamps the version marker; it NEVER drops
-  `phoenix_kit_payment_provider_configs`. The table is core-created, and
-  rolling back this module's chain must not destroy it — only core's own
-  baseline rollback does that.
+  `down/1` unstamps (or lowers) the version marker. It NEVER drops,
+  truncates or deletes anything — not the eleven tables, not a row in
+  them. These hold invoices, orders and transactions: rolling a billing
+  release back must cost the operator a version marker, never a payment
+  record. Only core's own baseline rollback owns dropping core's tables.
+
+  That is not a promise made in prose alone —
+  `test/phoenix_kit_billing/migrations_money_safety_test.exs` seeds real
+  rows in the money tables, runs a real `down(version: 0)` as a
+  migration, and requires the rows to still be there, with a mutation
+  case that proves the check fails against a rollback that does delete.
 
   The migrated version is tracked as a `pkb_schema:<N>` COMMENT on
   `phoenix_kit_payment_provider_configs` (the marker convention from the
@@ -48,7 +68,7 @@ defmodule PhoenixKitBilling.Migrations do
 
   use Ecto.Migration
 
-  @current_version 1
+  @current_version 2
   @marker_prefix "pkb_schema:"
   @version_table "phoenix_kit_payment_provider_configs"
 
@@ -96,11 +116,22 @@ defmodule PhoenixKitBilling.Migrations do
       0
   end
 
-  @doc "Applies every chain version up to `current_version/0` (idempotent)."
+  @doc """
+  Applies every chain version up to `target` (`:version` in `opts`,
+  defaulting to `current_version/0`) — idempotent in every direction.
+
+  Core codegens a literal `up(prefix: ..., version: <target>)` call, and
+  `target` is honoured rather than ignored: a host pinned to an older
+  chain version must not silently receive a later version's adoption.
+  """
   def up(opts \\ []) do
-    opts
-    |> validated_prefix()
-    |> up_statements()
+    prefix = validated_prefix(opts)
+
+    target =
+      if is_list(opts), do: Keyword.get(opts, :version, @current_version), else: @current_version
+
+    prefix
+    |> up_statements(target)
     |> Enum.each(&execute/1)
   end
 
@@ -119,17 +150,27 @@ defmodule PhoenixKitBilling.Migrations do
   end
 
   @doc """
-  The SQL `up/1` executes, as data — the testable single source. The
-  ownership test parses these statements to prove that the object names
-  are core's V135 names, that the CREATE TABLE stays shape-identical to
-  core's `ExpectedSchema` manifest, and that nothing here can drop the
+  The SQL `up/1` executes for `target`, as data — the testable single
+  source. The ownership tests parse these statements to prove that the
+  object names are core's names, that each CREATE stays shape-identical
+  to core's `ExpectedSchema` manifest, and that nothing here can drop a
   table.
   """
-  @spec up_statements(String.t()) :: [String.t()]
-  def up_statements(prefix \\ "public") do
+  @spec up_statements(String.t(), non_neg_integer()) :: [String.t()]
+  def up_statements(prefix \\ "public", target \\ @current_version)
+      when is_integer(target) and target >= 0 do
     prefix = validated_prefix(prefix: prefix)
     p = "#{prefix}."
 
+    v1 = if target >= 1, do: v1_statements(p, prefix), else: []
+    v2 = if target >= 2, do: v2_statements(p, prefix), else: []
+
+    v1 ++ v2 ++ [marker_statement(p, target)]
+  end
+
+  @doc "V1 — adoption of `phoenix_kit_payment_provider_configs` (unchanged since publication)."
+  @spec v1_statements(String.t(), String.t()) :: [String.t()]
+  def v1_statements(p, prefix) do
     [
       """
       CREATE TABLE IF NOT EXISTS #{p}#{@version_table} (
@@ -167,9 +208,665 @@ defmodule PhoenixKitBilling.Migrations do
       $$
       """,
       "CREATE UNIQUE INDEX IF NOT EXISTS #{@version_table}_provider_uidx ON #{p}#{@version_table} USING btree (provider)",
-      "CREATE UNIQUE INDEX IF NOT EXISTS #{@version_table}_uuid_idx ON #{p}#{@version_table} USING btree (uuid)",
-      "COMMENT ON TABLE #{p}#{@version_table} IS '#{@marker_prefix}#{@current_version}'"
+      "CREATE UNIQUE INDEX IF NOT EXISTS #{@version_table}_uuid_idx ON #{p}#{@version_table} USING btree (uuid)"
     ]
+  end
+
+  @doc """
+  V2 — adoption of the remaining ten billing tables.
+
+  Same Phase-0 contract as V1: every statement reproduces core's CURRENT
+  shape for the table (the `ExpectedSchema` manifest, which is core's
+  V135 baseline plus V162's `payment_option_uuid` column/FK/index on
+  orders and V164's `subscription_types` slug index) under core's exact
+  object names, so an install where core already created these tables
+  sees a pure no-op and the manifest stays accurate with NO core release.
+
+  Statement order is load-bearing: tables, then primary keys and unique
+  constraints, then indexes, then foreign keys last — by which point
+  every referenced table and referenced key exists, whatever order the
+  tables themselves were created in.
+
+  Three index names are mangled per-schema (`\#{pn}` — core's own
+  `pn = if prefix == "public", do: "", else: "\#{prefix}_"`). Emitting
+  them bare would create a SECOND index next to core's under a named
+  schema instead of adopting it.
+  """
+  @spec v2_statements(String.t(), String.t()) :: [String.t()]
+  def v2_statements(p, prefix) do
+    pn = if prefix == "public", do: "", else: "#{prefix}_"
+
+    tables = [
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_currencies (
+        "code" character varying(3) NOT NULL,
+        "name" character varying(255) NOT NULL,
+        "symbol" character varying(5) NOT NULL,
+        "decimal_places" integer DEFAULT 2 NOT NULL,
+        "is_default" boolean DEFAULT false NOT NULL,
+        "enabled" boolean DEFAULT true NOT NULL,
+        "exchange_rate" numeric(15,6) DEFAULT 1 NOT NULL,
+        "sort_order" integer DEFAULT 0 NOT NULL,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_subscription_types (
+        "name" character varying(255) NOT NULL,
+        "slug" character varying(255) NOT NULL,
+        "description" text,
+        "price" numeric(15,2) NOT NULL,
+        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+        "interval" character varying(10) DEFAULT 'month'::character varying NOT NULL,
+        "interval_count" integer DEFAULT 1 NOT NULL,
+        "trial_days" integer DEFAULT 0 NOT NULL,
+        "features" jsonb[] DEFAULT ARRAY[]::jsonb[] NOT NULL,
+        "active" boolean DEFAULT true NOT NULL,
+        "sort_order" integer DEFAULT 0 NOT NULL,
+        "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_payment_options (
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "name" character varying(255) NOT NULL,
+        "code" character varying(50) NOT NULL,
+        "type" character varying(20) DEFAULT 'offline'::character varying NOT NULL,
+        "provider" character varying(50),
+        "description" text,
+        "instructions" text,
+        "icon" character varying(100) DEFAULT 'hero-banknotes'::character varying,
+        "active" boolean DEFAULT false,
+        "position" integer DEFAULT 0,
+        "requires_billing_profile" boolean DEFAULT true,
+        "settings" jsonb DEFAULT '{}'::jsonb,
+        "inserted_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_billing_profiles (
+        "type" character varying(20) DEFAULT 'individual'::character varying NOT NULL,
+        "is_default" boolean DEFAULT false NOT NULL,
+        "name" character varying(255),
+        "first_name" character varying(255),
+        "last_name" character varying(255),
+        "middle_name" character varying(255),
+        "phone" character varying(255),
+        "email" character varying(255),
+        "company_name" character varying(255),
+        "company_vat_number" character varying(20),
+        "company_registration_number" character varying(30),
+        "company_legal_address" text,
+        "address_line1" character varying(255),
+        "address_line2" character varying(255),
+        "city" character varying(255),
+        "state" character varying(255),
+        "postal_code" character varying(20),
+        "country" character varying(2) DEFAULT 'EE'::character varying,
+        "metadata" jsonb DEFAULT '{}'::jsonb,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_payment_methods (
+        "provider" character varying(20) NOT NULL,
+        "provider_payment_method_id" character varying(255) NOT NULL,
+        "provider_customer_id" character varying(255),
+        "type" character varying(20) DEFAULT 'card'::character varying NOT NULL,
+        "brand" character varying(20),
+        "last4" character varying(4),
+        "exp_month" integer,
+        "exp_year" integer,
+        "display_name" character varying(255),
+        "is_default" boolean DEFAULT false NOT NULL,
+        "status" character varying(20) DEFAULT 'active'::character varying NOT NULL,
+        "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid NOT NULL
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_orders (
+        "order_number" character varying(30) NOT NULL,
+        "status" character varying(20) DEFAULT 'draft'::character varying NOT NULL,
+        "payment_method" character varying(20),
+        "line_items" jsonb DEFAULT '[]'::jsonb NOT NULL,
+        "subtotal" numeric(15,2) DEFAULT 0 NOT NULL,
+        "tax_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+        "tax_rate" numeric(5,4) DEFAULT 0 NOT NULL,
+        "discount_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+        "discount_code" character varying(50),
+        "total" numeric(15,2) NOT NULL,
+        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+        "billing_snapshot" jsonb DEFAULT '{}'::jsonb,
+        "notes" text,
+        "internal_notes" text,
+        "metadata" jsonb DEFAULT '{}'::jsonb,
+        "confirmed_at" timestamp with time zone,
+        "paid_at" timestamp with time zone,
+        "cancelled_at" timestamp with time zone,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "checkout_session_id" character varying(255),
+        "checkout_url" text,
+        "checkout_expires_at" timestamp with time zone,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid,
+        "billing_profile_uuid" uuid,
+        "payment_option_uuid" uuid
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_invoices (
+        "invoice_number" character varying(30) NOT NULL,
+        "status" character varying(20) DEFAULT 'draft'::character varying NOT NULL,
+        "subtotal" numeric(15,2) DEFAULT 0 NOT NULL,
+        "tax_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+        "tax_rate" numeric(5,4) DEFAULT 0 NOT NULL,
+        "total" numeric(15,2) NOT NULL,
+        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+        "due_date" date,
+        "billing_details" jsonb DEFAULT '{}'::jsonb,
+        "line_items" jsonb DEFAULT '[]'::jsonb NOT NULL,
+        "payment_terms" character varying(255),
+        "bank_details" jsonb DEFAULT '{}'::jsonb,
+        "notes" text,
+        "metadata" jsonb DEFAULT '{}'::jsonb,
+        "receipt_number" character varying(30),
+        "receipt_generated_at" timestamp with time zone,
+        "receipt_data" jsonb DEFAULT '{}'::jsonb,
+        "sent_at" timestamp with time zone,
+        "paid_at" timestamp with time zone,
+        "voided_at" timestamp with time zone,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "paid_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid NOT NULL,
+        "order_uuid" uuid,
+        "subscription_uuid" uuid
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_transactions (
+        "transaction_number" character varying(30) NOT NULL,
+        "amount" numeric(15,2) NOT NULL,
+        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+        "payment_method" character varying(20) DEFAULT 'bank'::character varying NOT NULL,
+        "description" character varying(255),
+        "metadata" jsonb DEFAULT '{}'::jsonb,
+        "provider_transaction_id" character varying(255),
+        "provider_data" jsonb DEFAULT '{}'::jsonb,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid NOT NULL,
+        "invoice_uuid" uuid
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_subscriptions (
+        "plan_name" character varying(255) NOT NULL,
+        "provider" character varying(20),
+        "provider_subscription_id" character varying(255),
+        "status" character varying(20) DEFAULT 'active'::character varying NOT NULL,
+        "current_period_start" timestamp with time zone NOT NULL,
+        "current_period_end" timestamp with time zone NOT NULL,
+        "cancel_at_period_end" boolean DEFAULT false NOT NULL,
+        "cancelled_at" timestamp with time zone,
+        "trial_start" timestamp with time zone,
+        "trial_end" timestamp with time zone,
+        "grace_period_end" timestamp with time zone,
+        "renewal_attempts" integer DEFAULT 0 NOT NULL,
+        "last_renewal_attempt_at" timestamp with time zone,
+        "last_renewal_error" character varying(255),
+        "price" numeric(15,2) NOT NULL,
+        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+        "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+        "user_uuid" uuid NOT NULL,
+        "billing_profile_uuid" uuid,
+        "payment_method_uuid" uuid,
+        "subscription_type_uuid" uuid
+      )
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_webhook_events (
+        "provider" character varying(20) NOT NULL,
+        "event_id" character varying(255) NOT NULL,
+        "event_type" character varying(255) NOT NULL,
+        "payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
+        "processed" boolean DEFAULT false NOT NULL,
+        "processed_at" timestamp with time zone,
+        "error_message" text,
+        "retry_count" integer DEFAULT 0 NOT NULL,
+        "inserted_at" timestamp with time zone NOT NULL,
+        "updated_at" timestamp with time zone NOT NULL,
+        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
+      )
+      """
+    ]
+
+    # primary keys — core's exact constraint names
+    pkeys = [
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_billing_profiles_pkey'
+            AND t.relname = 'phoenix_kit_billing_profiles'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_billing_profiles ADD CONSTRAINT phoenix_kit_billing_profiles_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_currencies_pkey'
+            AND t.relname = 'phoenix_kit_currencies'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_currencies ADD CONSTRAINT phoenix_kit_currencies_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_invoices_pkey'
+            AND t.relname = 'phoenix_kit_invoices'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_invoices ADD CONSTRAINT phoenix_kit_invoices_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_orders_pkey'
+            AND t.relname = 'phoenix_kit_orders'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_orders ADD CONSTRAINT phoenix_kit_orders_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_payment_methods_pkey'
+            AND t.relname = 'phoenix_kit_payment_methods'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_payment_methods ADD CONSTRAINT phoenix_kit_payment_methods_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_payment_options_pkey'
+            AND t.relname = 'phoenix_kit_payment_options'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_payment_options ADD CONSTRAINT phoenix_kit_payment_options_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_subscription_types_pkey'
+            AND t.relname = 'phoenix_kit_subscription_types'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_subscription_types ADD CONSTRAINT phoenix_kit_subscription_types_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_subscriptions_pkey'
+            AND t.relname = 'phoenix_kit_subscriptions'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_subscriptions ADD CONSTRAINT phoenix_kit_subscriptions_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_transactions_pkey'
+            AND t.relname = 'phoenix_kit_transactions'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_transactions ADD CONSTRAINT phoenix_kit_transactions_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_webhook_events_pkey'
+            AND t.relname = 'phoenix_kit_webhook_events'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_webhook_events ADD CONSTRAINT phoenix_kit_webhook_events_pkey PRIMARY KEY (uuid);
+        END IF;
+      END
+      $$
+      """
+    ]
+
+    # table-level UNIQUE constraints (not indexes)
+    uniques = [
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_payment_options_code_unique'
+            AND t.relname = 'phoenix_kit_payment_options'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_payment_options ADD CONSTRAINT phoenix_kit_payment_options_code_unique UNIQUE (code);
+        END IF;
+      END
+      $$
+      """
+    ]
+
+    # indexes — bare names, except the three core mangles per-schema
+    indexes = [
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_billing_profiles_user_uuid_idx ON #{p}phoenix_kit_billing_profiles USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_billing_profiles_uuid_idx ON #{p}phoenix_kit_billing_profiles USING btree (uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_currencies_code_uidx ON #{p}phoenix_kit_currencies USING btree (code)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_currencies_uuid_idx ON #{p}phoenix_kit_currencies USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_due_date_idx ON #{p}phoenix_kit_invoices USING btree (due_date)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_invoices_invoice_number_uidx ON #{p}phoenix_kit_invoices USING btree (invoice_number)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_order_uuid_idx ON #{p}phoenix_kit_invoices USING btree (order_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_status_idx ON #{p}phoenix_kit_invoices USING btree (status)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_subscription_uuid_idx ON #{p}phoenix_kit_invoices USING btree (subscription_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_user_uuid_idx ON #{p}phoenix_kit_invoices USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_invoices_uuid_idx ON #{p}phoenix_kit_invoices USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_billing_profile_uuid_idx ON #{p}phoenix_kit_orders USING btree (billing_profile_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_inserted_at_idx ON #{p}phoenix_kit_orders USING btree (inserted_at)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_orders_order_number_uidx ON #{p}phoenix_kit_orders USING btree (order_number)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_payment_option_uuid_index ON #{p}phoenix_kit_orders USING btree (payment_option_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_status_idx ON #{p}phoenix_kit_orders USING btree (status)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_user_uuid_idx ON #{p}phoenix_kit_orders USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_orders_uuid_idx ON #{p}phoenix_kit_orders USING btree (uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_payment_methods_provider_id_uidx ON #{p}phoenix_kit_payment_methods USING btree (provider, provider_payment_method_id)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_payment_methods_user_uuid_idx ON #{p}phoenix_kit_payment_methods USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS #{pn}phoenix_kit_payment_methods_uuid_idx ON #{p}phoenix_kit_payment_methods USING btree (uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_payment_methods_uuid_unique_index ON #{p}phoenix_kit_payment_methods USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS idx_payment_options_active ON #{p}phoenix_kit_payment_options USING btree (active)",
+      "CREATE INDEX IF NOT EXISTS idx_payment_options_position ON #{p}phoenix_kit_payment_options USING btree (\"position\")",
+      "CREATE UNIQUE INDEX IF NOT EXISTS #{pn}phoenix_kit_payment_options_uuid_idx ON #{p}phoenix_kit_payment_options USING btree (uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_plans_slug_uidx ON #{p}phoenix_kit_subscription_types USING btree (slug)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS #{pn}phoenix_kit_subscription_plans_uuid_idx ON #{p}phoenix_kit_subscription_types USING btree (uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_types_slug_uidx ON #{p}phoenix_kit_subscription_types USING btree (slug)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_types_uuid_unique_index ON #{p}phoenix_kit_subscription_types USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_billing_profile_uuid_idx ON #{p}phoenix_kit_subscriptions USING btree (billing_profile_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_payment_method_uuid_idx ON #{p}phoenix_kit_subscriptions USING btree (payment_method_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_period_end_idx ON #{p}phoenix_kit_subscriptions USING btree (current_period_end)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_provider_idx ON #{p}phoenix_kit_subscriptions USING btree (provider, provider_subscription_id)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_status_idx ON #{p}phoenix_kit_subscriptions USING btree (status)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_subscription_type_uuid_idx ON #{p}phoenix_kit_subscriptions USING btree (subscription_type_uuid) WHERE (subscription_type_uuid IS NOT NULL)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_subscriptions_user_uuid_idx ON #{p}phoenix_kit_subscriptions USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscriptions_uuid_idx ON #{p}phoenix_kit_subscriptions USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_transactions_invoice_uuid_idx ON #{p}phoenix_kit_transactions USING btree (invoice_uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_transactions_payment_method_idx ON #{p}phoenix_kit_transactions USING btree (payment_method)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_transactions_transaction_number_uidx ON #{p}phoenix_kit_transactions USING btree (transaction_number)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_transactions_user_uuid_idx ON #{p}phoenix_kit_transactions USING btree (user_uuid)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_transactions_uuid_idx ON #{p}phoenix_kit_transactions USING btree (uuid)",
+      "CREATE INDEX IF NOT EXISTS phoenix_kit_webhook_events_processed_idx ON #{p}phoenix_kit_webhook_events USING btree (processed)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_webhook_events_provider_event_uidx ON #{p}phoenix_kit_webhook_events USING btree (provider, event_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_webhook_events_uuid_idx ON #{p}phoenix_kit_webhook_events USING btree (uuid)"
+    ]
+
+    # foreign keys LAST: every referenced table and key exists by now
+    fks = [
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_billing_profiles_user_uuid'
+            AND t.relname = 'phoenix_kit_billing_profiles'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_billing_profiles ADD CONSTRAINT fk_billing_profiles_user_uuid FOREIGN KEY (user_uuid) REFERENCES #{p}phoenix_kit_users(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_invoices_order_uuid'
+            AND t.relname = 'phoenix_kit_invoices'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_invoices ADD CONSTRAINT fk_invoices_order_uuid FOREIGN KEY (order_uuid) REFERENCES #{p}phoenix_kit_orders(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_invoices_user_uuid'
+            AND t.relname = 'phoenix_kit_invoices'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_invoices ADD CONSTRAINT fk_invoices_user_uuid FOREIGN KEY (user_uuid) REFERENCES #{p}phoenix_kit_users(uuid) ON DELETE RESTRICT;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_orders_billing_profile_uuid'
+            AND t.relname = 'phoenix_kit_orders'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_orders ADD CONSTRAINT fk_orders_billing_profile_uuid FOREIGN KEY (billing_profile_uuid) REFERENCES #{p}phoenix_kit_billing_profiles(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_orders_payment_option'
+            AND t.relname = 'phoenix_kit_orders'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_orders ADD CONSTRAINT fk_orders_payment_option FOREIGN KEY (payment_option_uuid) REFERENCES #{p}phoenix_kit_payment_options(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_orders_user_uuid'
+            AND t.relname = 'phoenix_kit_orders'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_orders ADD CONSTRAINT fk_orders_user_uuid FOREIGN KEY (user_uuid) REFERENCES #{p}phoenix_kit_users(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'phoenix_kit_subscriptions_subscription_type_uuid_fkey'
+            AND t.relname = 'phoenix_kit_subscriptions'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_subscriptions ADD CONSTRAINT phoenix_kit_subscriptions_subscription_type_uuid_fkey FOREIGN KEY (subscription_type_uuid) REFERENCES #{p}phoenix_kit_subscription_types(uuid) ON DELETE SET NULL;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_transactions_invoice_uuid'
+            AND t.relname = 'phoenix_kit_transactions'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_transactions ADD CONSTRAINT fk_transactions_invoice_uuid FOREIGN KEY (invoice_uuid) REFERENCES #{p}phoenix_kit_invoices(uuid) ON DELETE RESTRICT;
+        END IF;
+      END
+      $$
+      """,
+      """
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE c.conname = 'fk_transactions_user_uuid'
+            AND t.relname = 'phoenix_kit_transactions'
+            AND n.nspname = '#{prefix}'
+        ) THEN
+          ALTER TABLE #{p}phoenix_kit_transactions ADD CONSTRAINT fk_transactions_user_uuid FOREIGN KEY (user_uuid) REFERENCES #{p}phoenix_kit_users(uuid) ON DELETE RESTRICT;
+        END IF;
+      END
+      $$
+      """
+    ]
+
+    tables ++ pkeys ++ uniques ++ indexes ++ fks
+  end
+
+  @spec marker_statement(String.t(), non_neg_integer()) :: String.t()
+  defp marker_statement(p, version) do
+    "COMMENT ON TABLE #{p}#{@version_table} IS '#{@marker_prefix}#{version}'"
   end
 
   @doc "The SQL `down/1` executes, as data (marker bookkeeping only)."

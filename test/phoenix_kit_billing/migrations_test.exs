@@ -40,7 +40,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
   describe "the coordinator implements the protocol" do
     test "current_version/0 and version_table/0" do
-      assert Migrations.current_version() == 1
+      assert Migrations.current_version() == 2
       assert Migrations.version_table() == "phoenix_kit_payment_provider_configs"
     end
 
@@ -70,7 +70,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
       statements = Migrations.up_statements()
 
       assert List.last(statements) ==
-               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:1'",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:2'",
              "the marker must be stamped after the DDL it certifies, not before"
     end
 
@@ -96,6 +96,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
   end
 
   describe "the chain can never destroy the table" do
+    alias PhoenixKit.Migrations.ExpectedSchema
+
     # Compared against the WHOLE expected content, not scanned for a
     # forbidden substring — a substring check only sees statements the
     # builder produced, so anything appended past it (a literal
@@ -123,31 +125,116 @@ defmodule PhoenixKitBilling.MigrationsTest do
     # reformatting and still failing on any statement added, removed or
     # retargeted — including a destructive one, which cannot enter this set
     # without changing it.
-    @up_operations [
-      {"CREATE TABLE", "phoenix_kit_payment_provider_configs"},
-      {"DO", "phoenix_kit_payment_provider_configs_pkey"},
-      {"CREATE UNIQUE INDEX", "phoenix_kit_payment_provider_configs_provider_uidx"},
-      {"CREATE UNIQUE INDEX", "phoenix_kit_payment_provider_configs_uuid_idx"},
-      {"COMMENT ON TABLE", "phoenix_kit_payment_provider_configs"}
-    ]
+    # The expected set is CORE'S MANIFEST for the eleven tables this chain
+    # adopts, not a hand-typed list. A hand-typed list is maintained by the
+    # same hand that adds a statement, so it catches a slip but never a
+    # deliberate one; the manifest is written on core's side, so this fails
+    # both when the chain emits an object core does not declare AND when
+    # core declares an object the chain stopped adopting. It is also the
+    # only formulation that survives a named schema, where core mangles
+    # three of these index names per-schema and a fixed list cannot.
+    @adopted_tables ~w(
+      phoenix_kit_payment_provider_configs
+      phoenix_kit_billing_profiles
+      phoenix_kit_currencies
+      phoenix_kit_invoices
+      phoenix_kit_orders
+      phoenix_kit_transactions
+      phoenix_kit_payment_methods
+      phoenix_kit_subscriptions
+      phoenix_kit_webhook_events
+      phoenix_kit_payment_options
+      phoenix_kit_subscription_types
+    )
 
-    test "up/1 emits exactly these operations and no others" do
+    test "up/1 emits exactly the operations core's manifest declares, and no others" do
       for prefix <- ["public", "billing_alt"] do
         actual = Enum.map(Migrations.up_statements(prefix), &operation/1)
+        expected = expected_operations(prefix)
 
-        assert Enum.sort(actual) == Enum.sort(@up_operations),
+        assert Enum.sort(actual) == Enum.sort(expected),
                """
-               up_statements(#{inspect(prefix)}) does not emit the expected set of
-               operations.
+               up_statements(#{inspect(prefix)}) does not emit the operation set
+               core's ExpectedSchema declares for the adopted tables.
 
-               unexpected: #{inspect(Enum.sort(actual) -- Enum.sort(@up_operations))}
-               missing:    #{inspect(Enum.sort(@up_operations) -- Enum.sort(actual))}
+               unexpected: #{inspect(Enum.sort(actual) -- Enum.sort(expected))}
+               missing:    #{inspect(Enum.sort(expected) -- Enum.sort(actual))}
 
                Every statement this chain emits runs against a core-created
-               table. Adding one is a chain version (V2+), not something to
-               slip past this list.
+               table. Adding one is a chain version, not something to slip
+               past this comparison.
                """
       end
+    end
+
+    # Pins the SIZE independently of the comparison above: if the manifest
+    # filter silently matched nothing (a renamed field, a changed check
+    # shape), both sides of that assertion would shrink together and stay
+    # green while proving nothing.
+    test "the adopted operation set is the size this chain was written for" do
+      assert length(expected_operations("public")) == 80
+    end
+
+    defp expected_operations(prefix) do
+      objects =
+        ExpectedSchema.objects(prefix)
+        |> Enum.filter(fn object ->
+          case object.check do
+            {_kind, %{table: table}} ->
+              table in @adopted_tables and object.class in [:index, :constraint]
+
+            _ ->
+              false
+          end
+        end)
+        |> Enum.map(fn object ->
+          name = object.check |> elem(1) |> Map.fetch!(:name)
+
+          case object.class do
+            :constraint -> {"DO", name}
+            :index -> {index_verb(object.create), name}
+          end
+        end)
+
+      tables = Enum.map(@adopted_tables, &{"CREATE TABLE", &1})
+
+      tables ++ objects ++ [{"COMMENT ON TABLE", "phoenix_kit_payment_provider_configs"}]
+    end
+
+    defp index_verb(create) do
+      if String.starts_with?(create, "CREATE UNIQUE INDEX"),
+        do: "CREATE UNIQUE INDEX",
+        else: "CREATE INDEX"
+    end
+
+    # `ON DELETE SET NULL` / `ON DELETE RESTRICT` are part of a foreign key's
+    # DEFINITION — the word DELETE there describes what Postgres does to a
+    # child row when a PARENT is deleted, and adopting core's FKs means
+    # reproducing core's referential actions verbatim. Scanning the raw text
+    # for the token would flag every one of them, so the clause is removed
+    # before the scan. `delete_teeth/0` below proves the removal did not
+    # blind the check.
+    defp strip_referential_actions(statement) do
+      String.replace(
+        statement,
+        ~r/ON\s+(DELETE|UPDATE)\s+(CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL|SET\s+DEFAULT)/i,
+        "ON <referential action>"
+      )
+    end
+
+    test "the referential-action strip does not blind the destructive scan" do
+      forbidden = ~r/\b(DROP|TRUNCATE|DELETE)\b/i
+
+      # A statement that carries a legitimate referential action AND a real
+      # destructive verb must still be caught.
+      mutant =
+        "ALTER TABLE public.phoenix_kit_invoices ADD CONSTRAINT x FOREIGN KEY (order_uuid) " <>
+          "REFERENCES public.phoenix_kit_orders(uuid) ON DELETE SET NULL; DROP TABLE public.phoenix_kit_invoices"
+
+      assert strip_referential_actions(mutant) =~ forbidden
+
+      assert strip_referential_actions("DELETE FROM public.phoenix_kit_invoices") =~ forbidden
+      assert strip_referential_actions("TRUNCATE public.phoenix_kit_orders") =~ forbidden
     end
 
     test "no statement anywhere in the data-level chain can drop/truncate/delete" do
@@ -155,7 +242,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
       for prefix <- ["public", "billing_alt"] do
         for stmt <- Migrations.up_statements(prefix) do
-          refute stmt =~ forbidden, "up_statements(#{inspect(prefix)}) contains: #{stmt}"
+          refute strip_referential_actions(stmt) =~ forbidden,
+                 "up_statements(#{inspect(prefix)}) contains: #{stmt}"
         end
 
         for target <- [0, 1, 2] do
@@ -219,7 +307,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     test "each direction executes its own builder" do
       source = File.read!(@source)
 
-      assert source =~ ~r/up_statements\(\)\s*\|>\s*Enum\.each\(&execute\/1\)/,
+      assert source =~ ~r/up_statements\(target\)\s*\|>\s*Enum\.each\(&execute\/1\)/,
              "up/1 no longer pipes up_statements/1 into execute/1 — whatever it " <>
                "runs instead is not what `up/1 emits exactly these operations` checks"
 
