@@ -100,6 +100,71 @@ defmodule PhoenixKitBilling.MigrationsMoneySafetyTest do
     end
   end
 
+  # Adoption must be a no-op on a host that already HAS this foreign key,
+  # including one carrying it under Ecto's default name rather than core's
+  # canonical one — the case core's V162 guards for explicitly. A name-keyed
+  # guard silently adds a second FK over the same column there; this runs
+  # the real statement against that real situation.
+  test "adopting the payment-option FK does not duplicate one that exists under another name" do
+    Repo.query!("ALTER TABLE phoenix_kit_orders DROP CONSTRAINT fk_orders_payment_option")
+
+    Repo.query!("""
+    ALTER TABLE phoenix_kit_orders
+      ADD CONSTRAINT phoenix_kit_orders_payment_option_uuid_fkey
+      FOREIGN KEY (payment_option_uuid)
+      REFERENCES phoenix_kit_payment_options(uuid) ON DELETE SET NULL
+    """)
+
+    assert fks_on_payment_option() == ["phoenix_kit_orders_payment_option_uuid_fkey"]
+
+    for statement <-
+          Enum.filter(
+            Migrations.up_statements("public"),
+            &String.contains?(&1, "ADD CONSTRAINT fk_orders_payment_option")
+          ) do
+      Repo.query!(statement)
+    end
+
+    assert fks_on_payment_option() == ["phoenix_kit_orders_payment_option_uuid_fkey"],
+           "adoption added a second foreign key over payment_option_uuid"
+  end
+
+  # The other direction: on a host with no such FK at all, the same
+  # statement must still CREATE it. Without this, a guard that always
+  # skipped would pass the test above and quietly stop adopting.
+  test "the same statement still creates the FK when the host has none" do
+    Repo.query!("ALTER TABLE phoenix_kit_orders DROP CONSTRAINT fk_orders_payment_option")
+    assert fks_on_payment_option() == []
+
+    for statement <-
+          Enum.filter(
+            Migrations.up_statements("public"),
+            &String.contains?(&1, "ADD CONSTRAINT fk_orders_payment_option")
+          ) do
+      Repo.query!(statement)
+    end
+
+    assert fks_on_payment_option() == ["fk_orders_payment_option"]
+  end
+
+  defp fks_on_payment_option do
+    %{rows: rows} =
+      Repo.query!("""
+      SELECT tc.constraint_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON kcu.constraint_name = tc.constraint_name
+       AND kcu.constraint_schema = tc.constraint_schema
+      WHERE tc.table_schema = 'public'
+        AND tc.table_name = 'phoenix_kit_orders'
+        AND tc.constraint_type = 'FOREIGN KEY'
+        AND kcu.column_name = 'payment_option_uuid'
+      ORDER BY 1
+      """)
+
+    List.flatten(rows)
+  end
+
   # ── helpers ──────────────────────────────────────────────────────────
 
   # Runs the migration IN THIS PROCESS, through Ecto's own migration

@@ -779,17 +779,32 @@ defmodule PhoenixKitBilling.Migrations do
       END
       $$
       """,
+      # The ONE guard that keys on the COLUMN rather than the constraint
+      # name, because core's V162 does the same, for a reason it states in
+      # its own comment: an earlier build of that migration created this FK
+      # under Ecto's DEFAULT name. On such a host a name-keyed guard finds
+      # no `fk_orders_payment_option`, and "adoption" quietly adds a SECOND
+      # foreign key over the same column. Reproduced before this guard was
+      # changed: pre-creating the FK as
+      # `phoenix_kit_orders_payment_option_uuid_fkey` and running the
+      # name-keyed version left two FKs on `payment_option_uuid`.
+      #
+      # The other eight FKs keep name-keyed guards — that is what core's
+      # V135 does for them, and adoption reproduces core's guard, not a
+      # tidier one.
       """
       DO $$
       BEGIN
         IF NOT EXISTS (
-          SELECT 1
-          FROM pg_constraint c
-          JOIN pg_class t ON t.oid = c.conrelid
-          JOIN pg_namespace n ON n.oid = t.relnamespace
-          WHERE c.conname = 'fk_orders_payment_option'
-            AND t.relname = 'phoenix_kit_orders'
-            AND n.nspname = '#{prefix}'
+          SELECT
+          FROM information_schema.table_constraints tc
+          JOIN information_schema.key_column_usage kcu
+            ON kcu.constraint_name = tc.constraint_name
+           AND kcu.constraint_schema = tc.constraint_schema
+          WHERE tc.table_schema = '#{prefix}'
+            AND tc.table_name = 'phoenix_kit_orders'
+            AND tc.constraint_type = 'FOREIGN KEY'
+            AND kcu.column_name = 'payment_option_uuid'
         ) THEN
           ALTER TABLE #{p}phoenix_kit_orders ADD CONSTRAINT fk_orders_payment_option FOREIGN KEY (payment_option_uuid) REFERENCES #{p}phoenix_kit_payment_options(uuid) ON DELETE SET NULL;
         END IF;

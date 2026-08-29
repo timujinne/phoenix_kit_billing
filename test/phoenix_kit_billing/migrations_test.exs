@@ -264,6 +264,26 @@ defmodule PhoenixKitBilling.MigrationsTest do
       assert strip_referential_actions("TRUNCATE public.phoenix_kit_orders") =~ forbidden
     end
 
+    # Core's V162 guards this one FK by COLUMN, not by name, and says why
+    # in its own comment: an earlier build created it under Ecto's default
+    # name. Adoption has to reproduce THAT guard — a name-keyed one finds
+    # nothing on such a host and adds a second FK over the same column
+    # (reproduced against a real database before this was fixed).
+    test "the payment-option FK is guarded by column, the way core guards it" do
+      [statement] =
+        Enum.filter(
+          Migrations.up_statements("public"),
+          &String.contains?(&1, "ADD CONSTRAINT fk_orders_payment_option")
+        )
+
+      assert statement =~ "kcu.column_name = 'payment_option_uuid'",
+             "the guard no longer keys on the column — a host carrying this FK " <>
+               "under Ecto's default name would get a duplicate:\n#{statement}"
+
+      refute statement =~ "c.conname = 'fk_orders_payment_option'",
+             "the guard keys on the constraint NAME again:\n#{statement}"
+    end
+
     test "no statement anywhere in the data-level chain can drop/truncate/delete" do
       forbidden = ~r/\b(DROP|TRUNCATE|DELETE)\b/i
 
