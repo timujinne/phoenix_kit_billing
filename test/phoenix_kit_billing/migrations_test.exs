@@ -172,7 +172,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     # shape), both sides of that assertion would shrink together and stay
     # green while proving nothing.
     test "the adopted operation set is the size this chain was written for" do
-      assert length(expected_operations("public")) == 80
+      assert length(expected_operations("public")) == 79
     end
 
     defp expected_operations(prefix) do
@@ -181,7 +181,11 @@ defmodule PhoenixKitBilling.MigrationsTest do
         |> Enum.filter(fn object ->
           case object.check do
             {_kind, %{table: table}} ->
-              table in @adopted_tables and object.class in [:index, :constraint]
+              # `:legacy_optional` marks an object a later core version
+              # renamed or retired. Core does not expect it to exist any
+              # more, so adopting it would recreate it on every install.
+              table in @adopted_tables and object.class in [:index, :constraint] and
+                Map.get(object, :presence) == :required
 
             _ ->
               false
@@ -409,6 +413,106 @@ defmodule PhoenixKitBilling.MigrationsTest do
         [type] -> %{type: type, default: nil, not_null: not_null}
         [type, default] -> %{type: type, default: default, not_null: not_null}
       end
+    end
+  end
+
+  describe "V2 stays aligned with core's manifest for all ten adopted tables" do
+    alias PhoenixKit.Migrations.ExpectedSchema
+
+    @v2_tables ~w(
+      phoenix_kit_billing_profiles
+      phoenix_kit_currencies
+      phoenix_kit_invoices
+      phoenix_kit_orders
+      phoenix_kit_transactions
+      phoenix_kit_payment_methods
+      phoenix_kit_subscriptions
+      phoenix_kit_webhook_events
+      phoenix_kit_payment_options
+      phoenix_kit_subscription_types
+    )
+
+    # The V1 test below proves one table's columns match core. This does
+    # the same for the other ten, and it is the guard that would have
+    # caught the mistake this version was originally written with:
+    # transcribing the CREATE TABLE from core's V135 alone, when V162 had
+    # since added `payment_option_uuid` to orders. A column core declares
+    # and V2 does not create is a table that comes out WRONG on any future
+    # install that gets it from this chain instead of core's baseline.
+    test "every column core declares for each adopted table is in V2's CREATE TABLE" do
+      creates = v2_creates()
+
+      for table <- @v2_tables do
+        core = core_columns_for(table)
+        ours = Map.fetch!(creates, table)
+
+        assert Map.keys(core) -- Map.keys(ours) == [],
+               "#{table}: V2 does not create columns core declares: " <>
+                 inspect(Map.keys(core) -- Map.keys(ours))
+
+        assert Map.keys(ours) -- Map.keys(core) == [],
+               "#{table}: V2 creates columns core does not declare: " <>
+                 inspect(Map.keys(ours) -- Map.keys(core))
+
+        for {column, expected} <- core do
+          assert Map.fetch!(ours, column) == expected,
+                 """
+                 #{table}.#{column}: V2 and core's manifest disagree.
+
+                 V2:              #{inspect(Map.fetch!(ours, column))}
+                 core's manifest: #{inspect(expected)}
+                 """
+        end
+      end
+    end
+
+    # Pins the SIZE of what the filter above matched. Without it, a filter
+    # that matched NOTHING would make every assertion in the test above
+    # compare two empty maps and iterate zero times — green, and proving
+    # nothing at all.
+    test "the manifest filter actually matches core's columns" do
+      totals = Map.new(@v2_tables, &{&1, map_size(core_columns_for(&1))})
+
+      assert totals == %{
+               "phoenix_kit_billing_profiles" => 23,
+               "phoenix_kit_currencies" => 11,
+               "phoenix_kit_invoices" => 27,
+               "phoenix_kit_orders" => 27,
+               "phoenix_kit_transactions" => 13,
+               "phoenix_kit_payment_methods" => 16,
+               "phoenix_kit_subscriptions" => 24,
+               "phoenix_kit_webhook_events" => 11,
+               "phoenix_kit_payment_options" => 14,
+               "phoenix_kit_subscription_types" => 15
+             }
+    end
+
+    defp core_columns_for(table) do
+      prefix = "column:#{table}."
+
+      ExpectedSchema.objects("public")
+      |> Enum.filter(&(&1.class == :column and String.starts_with?(&1.id, prefix)))
+      |> Map.new(fn object ->
+        {_version, shape} = List.last(object.revisions)
+
+        {String.replace_prefix(object.id, prefix, ""),
+         %{type: shape.type, default: shape.default, not_null: shape.not_null}}
+      end)
+    end
+
+    defp v2_creates do
+      Migrations.v2_statements("public.", "public")
+      |> Enum.filter(&String.starts_with?(&1, "CREATE TABLE"))
+      |> Map.new(fn create ->
+        [_, table] = Regex.run(~r/CREATE TABLE IF NOT EXISTS public\.(\w+)/, create)
+
+        columns =
+          ~r/^\s*"(\w+)"\s+(.+?),?$/m
+          |> Regex.scan(create)
+          |> Map.new(fn [_line, name, definition] -> {name, parse_column(definition)} end)
+
+        {table, columns}
+      end)
     end
   end
 end

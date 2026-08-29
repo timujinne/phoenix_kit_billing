@@ -655,7 +655,13 @@ defmodule PhoenixKitBilling.Migrations do
       """
     ]
 
-    # indexes — bare names, except the three core mangles per-schema
+    # indexes — bare names, except the three core mangles per-schema.
+    #
+    # `phoenix_kit_subscription_plans_slug_uidx` is deliberately ABSENT:
+    # core's V164 renamed it to `phoenix_kit_subscription_types_slug_uidx`
+    # and the manifest carries it as `presence: :legacy_optional`. Emitting
+    # it would resurrect, on every existing install, an index core went out
+    # of its way to rename away.
     indexes = [
       "CREATE INDEX IF NOT EXISTS phoenix_kit_billing_profiles_user_uuid_idx ON #{p}phoenix_kit_billing_profiles USING btree (user_uuid)",
       "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_billing_profiles_uuid_idx ON #{p}phoenix_kit_billing_profiles USING btree (uuid)",
@@ -682,7 +688,6 @@ defmodule PhoenixKitBilling.Migrations do
       "CREATE INDEX IF NOT EXISTS idx_payment_options_active ON #{p}phoenix_kit_payment_options USING btree (active)",
       "CREATE INDEX IF NOT EXISTS idx_payment_options_position ON #{p}phoenix_kit_payment_options USING btree (\"position\")",
       "CREATE UNIQUE INDEX IF NOT EXISTS #{pn}phoenix_kit_payment_options_uuid_idx ON #{p}phoenix_kit_payment_options USING btree (uuid)",
-      "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_plans_slug_uidx ON #{p}phoenix_kit_subscription_types USING btree (slug)",
       "CREATE UNIQUE INDEX IF NOT EXISTS #{pn}phoenix_kit_subscription_plans_uuid_idx ON #{p}phoenix_kit_subscription_types USING btree (uuid)",
       "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_types_slug_uidx ON #{p}phoenix_kit_subscription_types USING btree (slug)",
       "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_subscription_types_uuid_unique_index ON #{p}phoenix_kit_subscription_types USING btree (uuid)",
