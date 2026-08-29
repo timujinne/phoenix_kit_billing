@@ -127,8 +127,7 @@ defmodule PhoenixKitBilling.Migrations do
   def up(opts \\ []) do
     prefix = validated_prefix(opts)
 
-    target =
-      if is_list(opts), do: Keyword.get(opts, :version, @current_version), else: @current_version
+    target = target_version(opts, @current_version)
 
     prefix
     |> up_statements(target)
@@ -138,11 +137,7 @@ defmodule PhoenixKitBilling.Migrations do
   @doc "Rolls back to `target` (`:version` in `opts`). Never drops the table — see the moduledoc."
   def down(opts \\ []) do
     prefix = validated_prefix(opts)
-    # The protocol only ever calls down/1 with a keyword list (core codegens
-    # a literal `down(prefix: ..., version: ...)` call — see
-    # /app/lib/mix/tasks/phoenix_kit.update.ex:1178), so the map branch is
-    # dead in practice, same as validated_prefix/1's %{prefix: prefix} branch.
-    target = if is_list(opts), do: Keyword.get(opts, :version, 0), else: 0
+    target = target_version(opts, 0)
 
     prefix
     |> down_statements(target)
@@ -162,10 +157,18 @@ defmodule PhoenixKitBilling.Migrations do
     prefix = validated_prefix(prefix: prefix)
     p = "#{prefix}."
 
-    v1 = if target >= 1, do: v1_statements(p, prefix), else: []
-    v2 = if target >= 2, do: v2_statements(p, prefix), else: []
+    if target == 0 do
+      # "Apply up to version 0" is not an operation: there is nothing to
+      # apply, and stamping `pkb_schema:0` would be the only statement in
+      # this function that assumes the marker-carrying table already
+      # exists. Clearing the marker is `down/1`'s job.
+      []
+    else
+      v1 = v1_statements(p, prefix)
+      v2 = if target >= 2, do: v2_statements(p, prefix), else: []
 
-    v1 ++ v2 ++ [marker_statement(p, target)]
+      v1 ++ v2 ++ [marker_statement(p, target)]
+    end
   end
 
   @doc "V1 — adoption of `phoenix_kit_payment_provider_configs` (unchanged since publication)."
@@ -909,6 +912,20 @@ defmodule PhoenixKitBilling.Migrations do
       _ -> 0
     end
   end
+
+  # `:version` is read from a keyword list AND from a map, because
+  # `validated_prefix/1` accepts both — and a shape it accepts must not
+  # silently lose the version. Core codegens a keyword list, so the map
+  # path is not exercised in production; that is exactly why it was able
+  # to sit here defaulting to `@current_version` while `up/1`'s own @doc
+  # promised the opposite ("a host pinned to an older chain version must
+  # not silently receive a later version's adoption"). Found in review.
+  defp target_version(opts, default) when is_list(opts) do
+    Keyword.get(opts, :version, default)
+  end
+
+  defp target_version(%{} = opts, default), do: Map.get(opts, :version, default)
+  defp target_version(_opts, default), do: default
 
   defp validated_prefix(opts) do
     prefix =

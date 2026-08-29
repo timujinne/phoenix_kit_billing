@@ -41,6 +41,16 @@ defmodule PhoenixKitBilling.MigrationsMoneySafetyTest do
     def down, do: :ok
   end
 
+  defmodule RollbackToOneFromMap do
+    @moduledoc false
+    use Ecto.Migration
+
+    # Deliberately the MAP shape: it is accepted, so it must carry
+    # `:version` like the keyword list does.
+    def up, do: Migrations.down(%{prefix: "public", version: 1})
+    def down, do: :ok
+  end
+
   defmodule DestructiveRollback do
     @moduledoc false
     use Ecto.Migration
@@ -80,6 +90,15 @@ defmodule PhoenixKitBilling.MigrationsMoneySafetyTest do
     run_migration(RollbackToZero)
 
     assert Migrations.migrated_version_runtime(prefix: "public") == 0
+  end
+
+  test "a rollback to version 1 passed as a map stops at 1, not at 0" do
+    Repo.query!("COMMENT ON TABLE phoenix_kit_payment_provider_configs IS 'pkb_schema:2'")
+
+    run_migration(RollbackToOneFromMap)
+
+    assert Migrations.migrated_version_runtime(prefix: "public") == 1,
+           "the map shape lost :version and rolled the chain further back than asked"
   end
 
   test "the survival check has teeth: a destructive rollback fails it", %{seeded: seeded} do

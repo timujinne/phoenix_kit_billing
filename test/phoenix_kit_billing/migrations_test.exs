@@ -97,6 +97,29 @@ defmodule PhoenixKitBilling.MigrationsTest do
              "the marker must be stamped after the DDL it certifies, not before"
     end
 
+    # `up/1` and `down/1` accept a map as well as a keyword list, because
+    # `validated_prefix/1` does. A shape the function ACCEPTS must not
+    # silently lose `:version` — that is how `up/1` came to contradict its
+    # own @doc, defaulting a map to the latest version while promising a
+    # pinned host would not be advanced. Found in review.
+    test "a target below current_version applies only that far" do
+      assert length(Migrations.up_statements("public", 1)) == 5
+      assert length(Migrations.up_statements("billing_alt", 1)) == 5
+
+      refute Enum.any?(
+               Migrations.up_statements("public", 1),
+               &String.contains?(&1, "phoenix_kit_invoices")
+             ),
+             "V1-only application emitted a V2 table"
+
+      assert List.last(Migrations.up_statements("public", 1)) =~ "pkb_schema:1"
+    end
+
+    test "applying up to version 0 is not an operation" do
+      assert Migrations.up_statements("public", 0) == []
+      assert Migrations.up_statements("billing_alt", 0) == []
+    end
+
     test "every up statement is guarded (IF NOT EXISTS / DO-block idempotence)" do
       # V1 runs on installs where core's V135 already created everything, so
       # every statement must be a no-op against an object that is already
