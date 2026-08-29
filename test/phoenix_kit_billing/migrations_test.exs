@@ -73,6 +73,27 @@ defmodule PhoenixKitBilling.MigrationsTest do
     # adoption rests on. The rules are therefore core's, and this test
     # compares against core rather than restating them: a local copy is
     # exactly what drifted (upper case allowed, no length bound at all).
+    # The validator matters only if it cannot be walked around. These two
+    # builders were public, documented and validated nothing — and they
+    # took the schema-qualified prefix and the bare prefix as SEPARATE
+    # arguments, so a caller could point the existence checks at one
+    # schema and the ALTERs at another. Found in adversarial review.
+    test "every public builder that emits SQL validates its own prefix" do
+      for fun <- [:up_statements, :down_statements, :v1_statements, :v2_statements] do
+        assert_raise ArgumentError, fn -> apply(Migrations, fun, ["EVIL\";DROP"]) end
+        assert_raise ArgumentError, fn -> apply(Migrations, fun, [String.duplicate("a", 30)]) end
+        assert_raise ArgumentError, fn -> apply(Migrations, fun, [123]) end
+      end
+    end
+
+    # Structural, not behavioural: the two-argument forms are what allowed
+    # the schema of the guard and the schema of the DDL to disagree. They
+    # must not come back.
+    test "no builder takes the qualified and bare prefix as separate arguments" do
+      refute function_exported?(Migrations, :v1_statements, 2)
+      refute function_exported?(Migrations, :v2_statements, 2)
+    end
+
     test "the prefix rules are core's, case and length included" do
       for prefix <- [
             "public",
@@ -135,7 +156,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     # split has to be deliberate: the four statements below are exactly
     # what 0.9.0 executes, verified against the published tag's source.
     test "V1's published statements are frozen" do
-      v1 = Migrations.v1_statements("public.", "public")
+      v1 = Migrations.v1_statements("public")
 
       assert length(v1) == 4
 
@@ -630,7 +651,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     end
 
     defp v2_creates do
-      Migrations.v2_statements("public.", "public")
+      Migrations.v2_statements("public")
       |> Enum.filter(&String.starts_with?(&1, "CREATE TABLE"))
       |> Map.new(fn create ->
         [_, table] = Regex.run(~r/CREATE TABLE IF NOT EXISTS public\.(\w+)/, create)

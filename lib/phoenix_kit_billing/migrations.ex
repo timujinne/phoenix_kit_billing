@@ -165,16 +165,19 @@ defmodule PhoenixKitBilling.Migrations do
       # exists. Clearing the marker is `down/1`'s job.
       []
     else
-      v1 = v1_statements(p, prefix)
-      v2 = if target >= 2, do: v2_statements(p, prefix), else: []
+      v1 = v1_statements(prefix)
+      v2 = if target >= 2, do: v2_statements(prefix), else: []
 
       v1 ++ v2 ++ [marker_statement(p, target)]
     end
   end
 
   @doc "V1 — adoption of `phoenix_kit_payment_provider_configs` (unchanged since publication)."
-  @spec v1_statements(String.t(), String.t()) :: [String.t()]
-  def v1_statements(p, prefix) do
+  @spec v1_statements(String.t()) :: [String.t()]
+  def v1_statements(prefix \\ "public") do
+    prefix = validated_prefix(prefix: prefix)
+    p = "#{prefix}."
+
     [
       """
       CREATE TABLE IF NOT EXISTS #{p}#{@version_table} (
@@ -236,8 +239,10 @@ defmodule PhoenixKitBilling.Migrations do
   them bare would create a SECOND index next to core's under a named
   schema instead of adopting it.
   """
-  @spec v2_statements(String.t(), String.t()) :: [String.t()]
-  def v2_statements(p, prefix) do
+  @spec v2_statements(String.t()) :: [String.t()]
+  def v2_statements(prefix \\ "public") do
+    prefix = validated_prefix(prefix: prefix)
+    p = "#{prefix}."
     pn = if prefix == "public", do: "", else: "#{prefix}_"
 
     tables = [
@@ -977,7 +982,7 @@ defmodule PhoenixKitBilling.Migrations do
     else
       # Older core without the shared validator: apply core's documented
       # rules here rather than the looser ones this chain shipped with.
-      unless prefix =~ ~r/^[a-z_][a-z0-9_]*$/ and byte_size(prefix) <= 20 do
+      unless is_binary(prefix) and prefix =~ ~r/^[a-z_][a-z0-9_]*$/ and byte_size(prefix) <= 20 do
         raise ArgumentError, "invalid schema prefix: #{inspect(prefix)}"
       end
     end
