@@ -364,7 +364,7 @@ defmodule PhoenixKitBilling.Providers.PayPal do
     # If signature is just a string, we can't verify properly
     # In production, headers should be passed
     Logger.warning("PayPal webhook verification requires full headers map")
-    :ok
+    {:error, :invalid_signature}
   end
 
   # ============================================
@@ -459,14 +459,19 @@ defmodule PhoenixKitBilling.Providers.PayPal do
     else
       auth = Base.encode64("#{client_id}:#{client_secret}")
 
-      case Req.post(
-             "#{base_url()}/v1/oauth2/token",
-             headers: [
-               {"Authorization", "Basic #{auth}"},
-               {"Content-Type", "application/x-www-form-urlencoded"}
-             ],
-             body: "grant_type=client_credentials"
-           ) do
+      opts =
+        Keyword.merge(
+          [
+            headers: [
+              {"Authorization", "Basic #{auth}"},
+              {"Content-Type", "application/x-www-form-urlencoded"}
+            ],
+            body: "grant_type=client_credentials"
+          ],
+          Application.get_env(:phoenix_kit_billing, :paypal_req_options, [])
+        )
+
+      case Req.post("#{base_url()}/v1/oauth2/token", opts) do
         {:ok, %{status: 200, body: body}} ->
           {:ok, body["access_token"]}
 
