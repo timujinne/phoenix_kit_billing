@@ -459,6 +459,14 @@ defmodule PhoenixKitBilling.Providers.PayPal do
     else
       auth = Base.encode64("#{client_id}:#{client_secret}")
 
+      # TEST-ONLY seam: `:paypal_req_options` is never set in any shipped
+      # config (config.exs / runtime.exs) — this merge is a no-op in
+      # production. It exists so tests can point this one Req call at a
+      # `Req.Test` stub instead of PayPal's real OAuth endpoint, without a
+      # real network call or real credentials. Whoever can write
+      # Application env for this node already controls far bigger levers
+      # (the Repo URL, the endpoint's secret_key_base, ...), so this key
+      # does not expand what such an attacker can already do.
       opts =
         Keyword.merge(
           [

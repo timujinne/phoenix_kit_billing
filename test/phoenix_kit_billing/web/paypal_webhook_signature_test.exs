@@ -67,11 +67,24 @@ defmodule PhoenixKitBilling.Web.PaypalWebhookSignatureTest do
       |> conn("/webhooks/billing/paypal", "")
       |> assign(:raw_body, Keyword.get(opts, :raw_body, @raw_body))
 
-    case Keyword.fetch(opts, :signature) do
-      {:ok, sig} -> put_req_header(conn, "paypal-transmission-sig", sig)
-      :error -> conn
+    conn =
+      case Keyword.fetch(opts, :signature) do
+        {:ok, sig} -> put_req_header(conn, "paypal-transmission-sig", sig)
+        :error -> conn
+      end
+
+    # Mirrors what the real pipeline does: an exception raised inside the
+    # controller never reaches the client as a raw crash — Phoenix's
+    # endpoint turns it into a 500 response. Without this, a mutation that
+    # makes the controller raise would just crash the test itself (an
+    # ExUnit error) instead of producing an inspectable `conn.status`,
+    # which is exactly the gap that let a prior version of the "missing
+    # header" test (`assert conn.status != 200`) stay green under a 500.
+    try do
+      WebhookController.paypal(conn, %{})
+    rescue
+      _exception -> Plug.Conn.resp(conn, 500, Jason.encode!(%{"error" => "internal_error"}))
     end
-    |> WebhookController.paypal(%{})
   end
 
   test "a forged signature is rejected, and the rejection is visible in the HTTP response" do
@@ -81,11 +94,11 @@ defmodule PhoenixKitBilling.Web.PaypalWebhookSignatureTest do
     assert Jason.decode!(conn.resp_body) == %{"error" => "Invalid signature"}
   end
 
-  test "a missing signature header is rejected" do
+  test "a missing signature header is rejected with a specific status and body" do
     conn = post_webhook([])
 
-    assert conn.status != 200
-    assert %{"status" => "ok"} != Jason.decode!(conn.resp_body)
+    assert conn.status == 400
+    assert Jason.decode!(conn.resp_body) == %{"error" => "Processing failed"}
   end
 
   test "OAuth succeeding is not, by itself, enough to accept the request" do
