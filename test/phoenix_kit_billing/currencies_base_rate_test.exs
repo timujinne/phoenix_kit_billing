@@ -89,4 +89,55 @@ defmodule PhoenixKitBilling.CurrenciesBaseRateTest do
     usd = %{usd | exchange_rate: Decimal.new("0")}
     assert {:error, :invalid_base_rate} = PhoenixKitBilling.set_default_currency(usd)
   end
+
+  test "re-promoting the current default keeps it default and pins its rate to 1.0" do
+    Repo.delete_all(Currency)
+
+    {:ok, usd} =
+      PhoenixKitBilling.create_currency(%{
+        code: "USD",
+        name: "Dollar",
+        symbol: "$",
+        is_default: true,
+        exchange_rate: "1.10"
+      })
+
+    {:ok, _eur} =
+      PhoenixKitBilling.create_currency(%{
+        code: "EUR",
+        name: "Euro",
+        symbol: "€",
+        exchange_rate: "1.0"
+      })
+
+    {:ok, _gbp} =
+      PhoenixKitBilling.create_currency(%{
+        code: "GBP",
+        name: "Pound",
+        symbol: "£",
+        enabled: false,
+        exchange_rate: "0.85"
+      })
+
+    # `usd` is ALREADY the default here — the struct's own `is_default`
+    # field is `true` before the call, same as what
+    # `PhoenixKitBilling.get_default_currency/0` would hand a caller who
+    # wants to fix the current default's rate without switching currencies
+    # (exactly what `mix decor.renormalize_fx_rates` does). This is the
+    # regression case: re-promoting the currency that is already default
+    # must not leave the table with NO default at all.
+    assert {:ok, %Currency{code: "USD", is_default: true, exchange_rate: rate}} =
+             PhoenixKitBilling.set_default_currency(usd)
+
+    assert Decimal.equal?(rate, Decimal.new("1.0"))
+
+    currencies = PhoenixKitBilling.list_currencies()
+    defaults = Enum.filter(currencies, & &1.is_default)
+    assert [%Currency{code: "USD"}] = defaults
+
+    by_code = Map.new(currencies, &{&1.code, &1})
+    assert Decimal.equal?(by_code["USD"].exchange_rate, Decimal.new("1.0"))
+    assert Decimal.equal?(by_code["EUR"].exchange_rate, Decimal.new("0.909091"))
+    assert Decimal.equal?(by_code["GBP"].exchange_rate, Decimal.new("0.772727"))
+  end
 end

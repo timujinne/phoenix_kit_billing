@@ -752,18 +752,52 @@ defmodule PhoenixKitBilling do
   own stored rate happens to be wrong — exactly the operation a host
   needs to fix that. The invariant is enforced here, procedurally,
   instead: renormalize, then promote at `1.0`.
+
+  The struct the caller passes may be STALE by the time step 3 runs —
+  most importantly when the caller is re-promoting the currency that is
+  ALREADY the default (fixing its rate without switching currencies,
+  e.g. a one-off renormalization task): step 2's `update_all` has just
+  set that very row's `is_default` to `false` in the database, but the
+  passed-in struct's own `is_default` field still reads `true` from
+  before the call. `Ecto.Changeset.cast/3` compares a field's new value
+  against the struct's OWN current value, not a fresh read of the row —
+  sees `true -> true`, decides nothing changed, and never puts
+  `:is_default` in the changeset's `changes`, so the `UPDATE` it emits
+  never touches that column. Left uncorrected, the row stays `false`
+  from step 2 and nothing is left default at all. Step 3 therefore
+  RELOADS the row before building the promote changeset, and forces both
+  `:is_default` and `:exchange_rate` into the changeset regardless of
+  what the reloaded row already says — belt-and-braces, since step 1's
+  renormalization also just changed this same row's rate out from under
+  any struct captured before the transaction.
   """
   def set_default_currency(%Currency{exchange_rate: rate} = currency) do
     if is_nil(rate) or Decimal.compare(rate, 0) != :gt do
       {:error, :invalid_base_rate}
     else
       repo().transaction(fn ->
+        # 0. Reload before doing anything else: the caller's struct can be
+        #    stale by the time this transaction actually starts (another
+        #    process changed the row in between), so the guard above,
+        #    checked against the CALLER's copy, is re-checked here against
+        #    what the database currently holds — the value step 1 is about
+        #    to divide every rate by.
+        fresh_before = repo().get_by!(Currency, uuid: currency.uuid)
+
+        if is_nil(fresh_before.exchange_rate) or
+             Decimal.compare(fresh_before.exchange_rate, 0) != :gt do
+          repo().rollback(:invalid_base_rate)
+        end
+
+        base_rate = fresh_before.exchange_rate
+
         # 1. Renormalize every rate against the new base, past the
         #    changeset — ratios are preserved, so no converted price moves.
         from(c in Currency,
           update: [
             set: [
-              exchange_rate: fragment("round(? / ?, 6)", c.exchange_rate, type(^rate, :decimal))
+              exchange_rate:
+                fragment("round(? / ?, 6)", c.exchange_rate, type(^base_rate, :decimal))
             ]
           ]
         )
@@ -774,13 +808,22 @@ defmodule PhoenixKitBilling do
         |> where([c], c.is_default == true)
         |> repo().update_all(set: [is_default: false])
 
-        # 3. Promote, pinning the base rate to exactly 1.0 (also enables it).
-        currency
+        # 3. Promote, pinning the base rate to exactly 1.0 (also enables
+        #    it). Reload again — step 1/2 just changed this same row out
+        #    from under `fresh_before` — and force both fields into the
+        #    changeset so the UPDATE always carries them, even when the
+        #    reloaded row already (mis)reports them as unchanged (see the
+        #    moduledoc note above).
+        fresh = repo().get_by!(Currency, uuid: currency.uuid)
+
+        fresh
         |> Currency.changeset(%{
           is_default: true,
           enabled: true,
           exchange_rate: Decimal.new("1.0")
         })
+        |> Ecto.Changeset.force_change(:is_default, true)
+        |> Ecto.Changeset.force_change(:exchange_rate, Decimal.new("1.0"))
         |> repo().update!()
       end)
     end
