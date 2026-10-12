@@ -37,7 +37,7 @@ parser was self-tested against a deliberately broken file first.
   placeholder sets, the line-items table paragraph intact, no optional variable left behind.
 - **Glossary.** рахунок (invoice), квитанція (receipt), кредит-нота, повернення коштів, платіжний профіль,
   адреса для рахунку, банківський переказ, Білінг (module), ПДВ.
-- **Tests.** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test
+- **Tests.** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test
   test/phoenix_kit_billing/pot_drift_test.exs` → 5 tests, 0 failures.
 
 ## Findings
@@ -164,7 +164,7 @@ status filter right as well.
 - **Literal `mix gettext.merge` output.** Re-running the merge on a copy reports "0 new, 0 removed, 675
   unchanged" and produces a byte-identical file.
 - **Full checker re-run.** 675/675 entries, 0 errors. The language heuristics show no new hits.
-- **Tests.** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test
+- **Tests.** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test
   test/phoenix_kit_billing/pot_drift_test.exs test/phoenix_kit_billing/email_defaults_test.exs` → 41 tests,
   0 failures. `uk` is now included at `:168`, `:194`, `:285` and `:301`.
 - **Emails.** The receipt reads «Дякуємо за оплату. {{payment_date}} ми отримали … за рахунком
@@ -236,7 +236,7 @@ optional code line, and the status filter now renders correctly in every locale.
   - en: «… / Voided / …»
 
   The invoice-page action stays «Анулювати» / «Аннулировать» / «Tühista arve» / «Void».
-- **Tests:** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test
+- **Tests:** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test
   test/phoenix_kit_billing/pot_drift_test.exs test/phoenix_kit_billing/email_defaults_test.exs` → 41
   tests, 0 failures. Checker: 675/675, 0 errors.
 - **Diff against `main`:** the declared files, this one-line template change, and the review file

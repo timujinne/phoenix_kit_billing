@@ -40,7 +40,7 @@ and one data-loss trap in the new form need fixing before merge.
 
 ## Verification
 
-- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test`
+- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test`
   in the PR worktree gives 702 tests, 0 failures, 4 skipped (the documented
   subscription chain gap).
 - **Gate:** `compile --warnings-as-errors`, `format --check-formatted`,
@@ -352,7 +352,7 @@ on top of 0940d67, which commits round 1 under
 
 ## Verification
 
-- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test`
+- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test`
   in the worktree gives 715 tests, 0 failures, 4 skipped.
 - **Gate:** `compile --warnings-as-errors`, `format --check-formatted`,
   `credo --strict` and `dialyzer` are clean. I ran them in a scratch copy;
@@ -520,7 +520,7 @@ touches (`email_defaults.ex`, `settings_documents_test.exs`).
 
 ## Verification
 
-- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_domovych_uk PGPOOL=10 mix test`
+- **Suite:** `MIX_ENV=test PGDATABASE=pkbill_test_uk PGPOOL=10 mix test`
   in the worktree gives 715 tests, 0 failures, 4 skipped.
 - **Gate:**
   - In a scratch copy: `compile --warnings-as-errors`, `format --check-formatted`
