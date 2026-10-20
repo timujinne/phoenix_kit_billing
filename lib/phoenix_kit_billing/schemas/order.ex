@@ -38,6 +38,28 @@ defmodule PhoenixKitBilling.Order do
   - `notes`: Customer-visible notes
   - `internal_notes`: Admin-only notes
 
+  ## Revision and external sync
+
+  Two keys of `metadata` belong to billing and cannot be set through
+  `changeset/2` or `status_changeset/2`:
+
+  - `"revision"`: a counter of the changes an external system cares about. A
+    new order starts at 1 (an order stored before the counter existed reads as
+    1). Every update that changes the status, the order number, the buyer, the
+    line items, an amount, the currency, the payment, the notes, the billing
+    details, a confirmation, payment or cancellation time, or any other
+    `metadata` key adds 1. `internal_notes` and the frozen `base_*` figures do
+    not move it. The increment is made under a row lock, so two concurrent
+    updates both count. `revision/1` reads it.
+  - `"sync"`: the external system's mark for the order, written only by
+    `PhoenixKitBilling.put_order_sync/2`, which touches neither `revision` nor
+    `updated_at`. `sync/1` reads it and `where_sync/2` filters on it.
+
+  A mark belongs to the revision it was written for. When the order changes
+  afterwards its revision is higher than the mark's, and `sync/1` reports the
+  order as `"pending"` again (keeping the external id and number it already
+  has), so the external system knows to take it again.
+
   ## Status Workflow
 
   ```
@@ -85,6 +107,8 @@ defmodule PhoenixKitBilling.Order do
   use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
   import Ecto.Query, warn: false
+
+  @type t :: %__MODULE__{}
 
   alias PhoenixKit.Utils.CountryData
   alias PhoenixKit.Utils.Date, as: UtilsDate
@@ -215,6 +239,7 @@ defmodule PhoenixKitBilling.Order do
     |> validate_number(:discount_amount, greater_than_or_equal_to: 0)
     |> validate_line_items()
     |> maybe_generate_order_number()
+    |> track_revision()
     |> unique_constraint(:order_number)
     # Named explicitly — see the note in `Invoice.changeset/2`.
     |> foreign_key_constraint(:user_uuid, name: :fk_orders_user_uuid)
@@ -252,6 +277,7 @@ defmodule PhoenixKitBilling.Order do
       order
       |> change(status: new_status)
       |> validate_status_transition(order.status, new_status)
+      |> track_revision()
 
     case new_status do
       "confirmed" ->
@@ -328,6 +354,174 @@ defmodule PhoenixKitBilling.Order do
       # Will be set by context with proper prefix from settings
       changeset
     end
+  end
+
+  # -- revision and external sync ---------------------------------------------
+
+  # Metadata keys billing owns: no changeset can set, replace or drop them.
+  @owned_metadata_keys ~w(revision sync)
+
+  # What an external system reads of an order. `internal_notes` and the frozen
+  # `base_*` figures are not among them.
+  @revision_fields ~w(status order_number user_uuid payment_method payment_option_uuid line_items
+                      subtotal tax_amount tax_rate discount_amount discount_code total currency
+                      billing_profile_uuid billing_snapshot notes confirmed_at paid_at
+                      cancelled_at)a
+
+  @doc """
+  The revision of an order: how many times it changed in a way an external
+  system cares about, counting its creation. See the moduledoc.
+  """
+  @spec revision(t()) :: pos_integer()
+  def revision(%__MODULE__{metadata: metadata}), do: revision_of(metadata)
+
+  defp revision_of(%{"revision" => revision}) when is_integer(revision) and revision > 0,
+    do: revision
+
+  defp revision_of(_metadata), do: 1
+
+  @doc """
+  What the external system's mark says about the order now.
+
+  Returns a map with string keys `"state"`, `"external_id"`, `"external_number"`,
+  `"external_status"`, `"synced_at"`, `"error"` and `"revision"` (the order's
+  current revision).
+
+  `"state"` is `"synced"` or `"failed"` only while the mark was written for the
+  order's current revision; an order without a mark, or one that changed after
+  it was marked, is `"pending"`. A mark's `"error"` is shown only with the
+  `"failed"` state it explains.
+  """
+  @spec sync(t()) :: map()
+  def sync(%__MODULE__{metadata: metadata} = order) do
+    current = revision(order)
+    stored = if is_map(metadata["sync"]), do: metadata["sync"], else: %{}
+
+    settled? =
+      stored["state"] in ~w(synced failed) and is_integer(stored["revision"]) and
+        stored["revision"] == current
+
+    state = if settled?, do: stored["state"], else: "pending"
+
+    %{
+      "state" => state,
+      "external_id" => stored["external_id"],
+      "external_number" => stored["external_number"],
+      "external_status" => stored["external_status"],
+      "synced_at" => stored["synced_at"],
+      "error" => if(state == "failed", do: stored["error"]),
+      "revision" => current
+    }
+  end
+
+  # Whether the mark was written for the order's current revision. A stored
+  # revision that is not a positive whole number reads as none (the mark is
+  # not current) instead of failing the cast and the whole query; the order's
+  # own revision then reads as 1, as `revision/1` does.
+  defmacrop sync_revision_current?(metadata) do
+    quote do
+      fragment(
+        """
+        CASE WHEN jsonb_typeof(?->'sync'->'revision') = 'number'
+                  AND (?->'sync'->'revision')::text ~ '^[1-9][0-9]*$'
+             THEN (?->'sync'->'revision')::text::numeric
+        END = coalesce(
+          CASE WHEN jsonb_typeof(?->'revision') = 'number'
+                    AND (?->'revision')::text ~ '^[1-9][0-9]*$'
+               THEN (?->'revision')::text::numeric
+          END, 1)
+        """,
+        unquote(metadata),
+        unquote(metadata),
+        unquote(metadata),
+        unquote(metadata),
+        unquote(metadata),
+        unquote(metadata)
+      )
+    end
+  end
+
+  @doc """
+  Narrows an `Order` query to orders whose `sync/1` state is `:pending` or
+  `:synced`; `:any` leaves it alone. A `failed` order is in neither narrowed
+  set until it changes again.
+  """
+  @spec where_sync(Ecto.Queryable.t(), :pending | :synced | :any) :: Ecto.Query.t()
+  def where_sync(query, :any), do: from(o in query)
+
+  def where_sync(query, :synced) do
+    from(o in query,
+      where:
+        fragment("?->'sync'->>'state'", o.metadata) == "synced" and
+          sync_revision_current?(o.metadata)
+    )
+  end
+
+  def where_sync(query, :pending) do
+    from(o in query,
+      where:
+        not fragment(
+          "coalesce(?->'sync'->>'state' IN ('synced', 'failed') AND ?, false)",
+          o.metadata,
+          sync_revision_current?(o.metadata)
+        )
+    )
+  end
+
+  # A new order starts at revision 1. An update that changes what an external
+  # system reads adds 1, counted on the locked row so concurrent updates both
+  # count. Whatever the attrs say, `sync` and `revision` stay as stored.
+  defp track_revision(%Ecto.Changeset{data: %{__meta__: %{state: :built}}} = changeset) do
+    metadata = get_field(changeset, :metadata) || %{}
+    put_change(changeset, :metadata, metadata |> Map.delete("sync") |> Map.put("revision", 1))
+  end
+
+  defp track_revision(%Ecto.Changeset{} = changeset) do
+    changeset = keep_owned_metadata(changeset)
+
+    if revision_relevant?(changeset),
+      do: prepare_changes(changeset, &bump_revision/1),
+      else: changeset
+  end
+
+  defp keep_owned_metadata(changeset) do
+    case fetch_change(changeset, :metadata) do
+      {:ok, %{} = metadata} ->
+        owned = Map.take(changeset.data.metadata || %{}, @owned_metadata_keys)
+
+        put_change(
+          changeset,
+          :metadata,
+          metadata |> Map.drop(@owned_metadata_keys) |> Map.merge(owned)
+        )
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp revision_relevant?(changeset) do
+    Enum.any?(@revision_fields, &Map.has_key?(changeset.changes, &1)) or
+      Map.has_key?(changeset.changes, :metadata)
+  end
+
+  defp bump_revision(changeset) do
+    uuid = changeset.data.uuid
+
+    stored =
+      from(o in __MODULE__, where: o.uuid == ^uuid, lock: "FOR UPDATE", select: o.metadata)
+      |> changeset.repo.one()
+      |> Kernel.||(%{})
+
+    base =
+      case fetch_change(changeset, :metadata) do
+        {:ok, %{} = metadata} -> metadata
+        _ -> stored
+      end
+
+    owned = stored |> Map.take(["sync"]) |> Map.put("revision", revision_of(stored) + 1)
+
+    put_change(changeset, :metadata, base |> Map.drop(@owned_metadata_keys) |> Map.merge(owned))
   end
 
   @doc """

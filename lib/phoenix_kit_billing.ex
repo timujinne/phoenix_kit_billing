@@ -2477,6 +2477,145 @@ defmodule PhoenixKitBilling do
 
   def delete_order(_order), do: {:error, :can_only_delete_drafts}
 
+  @order_sync_types %{
+    state: :string,
+    revision: :integer,
+    external_id: :string,
+    external_number: :string,
+    external_status: :string,
+    error: :string
+  }
+
+  @doc """
+  Records an external system's mark on an order, in any status.
+
+  Writes only `metadata["sync"]`: the status, the amounts, `updated_at` and
+  `metadata["revision"]` are not touched, and no order event is broadcast, so
+  the mark does not make the order look changed. The row is locked while the
+  mark is checked and written.
+
+  `order` is an `Order` or its uuid. `attrs` takes (atom or string keys):
+
+    * `:state` (required) - `"synced"` or `"failed"`
+    * `:revision` (required) - the revision of the order the external system
+      took (see `PhoenixKitBilling.Order.revision/1`). When it is no longer the
+      order's current revision, nothing is written and `{:error, :stale_revision}`
+      comes back: the order changed after it was read. A mark with no revision
+      could land on a revision the external system never saw, so it is refused
+      as invalid.
+    * `:external_id`, `:external_number`, `:external_status` - what the external
+      system calls the order. A key left out keeps the stored value, so a
+      `"failed"` mark on an order taken earlier does not forget its id.
+    * `:error` - why the external system refused it; kept only with `"failed"`.
+
+  A mark belongs to the revision it was written for: once the order changes,
+  `PhoenixKitBilling.Order.sync/1` reports it as `"pending"` again.
+
+  Returns `{:ok, order}`, `{:error, :not_found}`, `{:error, :stale_revision}`
+  or `{:error, changeset}` for invalid `attrs`. Repeating a call with the same
+  `attrs` leaves the stored mark as it is.
+  """
+  @spec put_order_sync(Order.t() | String.t(), map()) ::
+          {:ok, Order.t()} | {:error, :not_found | :stale_revision | Ecto.Changeset.t()}
+  def put_order_sync(%Order{uuid: uuid}, attrs), do: put_order_sync(uuid, attrs)
+
+  def put_order_sync(uuid, attrs) when is_binary(uuid) and is_map(attrs) do
+    with {:ok, params} <- order_sync_params(attrs),
+         true <- UUIDUtils.valid?(uuid) || {:error, :not_found} do
+      repo().transaction(fn ->
+        case write_order_sync(uuid, params) do
+          :ok -> get_order(uuid)
+          {:error, reason} -> repo().rollback(reason)
+        end
+      end)
+    end
+  end
+
+  defp order_sync_params(attrs) do
+    changeset =
+      {%{}, @order_sync_types}
+      |> Ecto.Changeset.cast(
+        Map.new(attrs, fn {k, v} -> {to_string(k), v} end),
+        Map.keys(@order_sync_types)
+      )
+      |> Ecto.Changeset.validate_required([:state, :revision])
+      |> Ecto.Changeset.validate_inclusion(:state, ~w(synced failed))
+      |> Ecto.Changeset.validate_number(:revision, greater_than: 0)
+      |> Ecto.Changeset.validate_length(:external_id, max: 255)
+      |> Ecto.Changeset.validate_length(:external_number, max: 255)
+      |> Ecto.Changeset.validate_length(:external_status, max: 255)
+      |> Ecto.Changeset.validate_length(:error, max: 2000)
+
+    if changeset.valid?,
+      do: {:ok, Ecto.Changeset.apply_changes(changeset)},
+      else: {:error, changeset}
+  end
+
+  defp write_order_sync(uuid, params) do
+    order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one()
+    current = order && Order.revision(order)
+
+    cond do
+      is_nil(order) ->
+        {:error, :not_found}
+
+      params.revision != current ->
+        {:error, :stale_revision}
+
+      true ->
+        sync = order_sync_mark(order.metadata["sync"], params)
+
+        {1, _} =
+          Order
+          |> where([o], o.uuid == ^uuid)
+          |> update([o],
+            set: [
+              metadata:
+                fragment(
+                  "jsonb_set(coalesce(?, '{}'::jsonb), '{sync}', ?, true)",
+                  o.metadata,
+                  type(^sync, :map)
+                )
+            ]
+          )
+          |> repo().update_all([])
+
+        :ok
+    end
+  end
+
+  defp order_sync_mark(stored, params) do
+    stored = if is_map(stored), do: stored, else: %{}
+
+    given =
+      for key <- [:external_id, :external_number, :external_status],
+          value = params[key],
+          into: %{},
+          do: {Atom.to_string(key), value}
+
+    mark =
+      stored
+      |> Map.take(["external_id", "external_number", "external_status", "synced_at"])
+      |> Map.merge(given)
+      |> Map.merge(%{"state" => params.state, "revision" => params.revision})
+      |> put_order_sync_error(params)
+
+    cond do
+      Map.reject(mark, &nil_value?/1) == Map.reject(stored, &nil_value?/1) -> stored
+      params.state == "synced" -> Map.put(mark, "synced_at", now_iso())
+      true -> mark
+    end
+  end
+
+  defp put_order_sync_error(mark, %{state: "failed", error: error}) when is_binary(error),
+    do: Map.put(mark, "error", error)
+
+  defp put_order_sync_error(mark, _params), do: mark
+
+  defp nil_value?({_key, value}), do: is_nil(value)
+
+  defp now_iso, do: DateTime.to_iso8601(UtilsDate.utc_now())
+
   defp apply_order_filters(query, filters) do
     Enum.reduce(filters, query, fn
       {:status, status}, q when is_binary(status) ->
