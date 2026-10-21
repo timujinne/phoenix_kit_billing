@@ -12,6 +12,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.BillingProfile
   alias PhoenixKitBilling.Currency
+  alias PhoenixKitBilling.Events
 
   # ── Currencies ───────────────────────────────────────────────────
 
@@ -152,6 +153,31 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
 
       # paid is not payable again
       assert {:error, :order_not_payable} = Billing.mark_order_paid(paid)
+    end
+
+    test "mark_order_refunded/1 broadcasts :order_refunded on the orders and user topics",
+         %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      {:ok, confirmed} = Billing.confirm_order(order)
+      {:ok, paid} = Billing.mark_order_paid(confirmed)
+
+      Events.subscribe_orders()
+      Events.subscribe_user_orders(user.uuid)
+
+      assert {:ok, refunded} = Billing.mark_order_refunded(paid)
+      assert refunded.status == "refunded"
+
+      assert_receive {:order_refunded, %{uuid: uuid, status: "refunded"}}
+      assert uuid == order.uuid
+      assert_receive {:order_refunded, %{uuid: ^uuid}}
+    end
+
+    test "mark_order_refunded/1 broadcasts nothing for an order that is not paid", %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      Events.subscribe_orders()
+
+      assert {:error, :order_not_refundable} = Billing.mark_order_refunded(order)
+      refute_receive {:order_refunded, _}
     end
 
     test "cancel_order/2 records reason", %{user: user} do
