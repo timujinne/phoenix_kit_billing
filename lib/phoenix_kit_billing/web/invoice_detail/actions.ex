@@ -12,6 +12,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.Activity
+  alias PhoenixKitBilling.Paths
 
   def record_payment(socket) do
     %{
@@ -295,8 +296,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     transaction_uuid = socket.assigns.send_payment_confirmation_transaction_uuid
     transaction = Enum.find(socket.assigns.transactions, &(&1.uuid == transaction_uuid))
 
-    payment_url =
-      Routes.url("/admin/billing/invoices/#{invoice.uuid}/payment/#{transaction_uuid}")
+    payment_url = Routes.base_url() <> Paths.payment_confirmation(invoice.uuid, transaction_uuid)
 
     with %{} <- transaction,
          {:ok, updated_transaction, email_result} <-
