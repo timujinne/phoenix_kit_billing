@@ -350,8 +350,9 @@
                             <%!-- Payment: Payment Confirmation actions --%>
                             <.table_row_menu_link
                               navigate={
-                                PhoenixKit.Utils.Routes.path(
-                                  "/admin/billing/invoices/#{@invoice.uuid}/payment/#{transaction.uuid}"
+                                PhoenixKitBilling.Paths.payment_confirmation(
+                                  @invoice.uuid,
+                                  transaction.uuid
                                 )
                               }
                               target="_blank"
