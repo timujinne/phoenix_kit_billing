@@ -74,7 +74,13 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
 
   @impl true
   def handle_info({event, %{uuid: uuid}}, %{assigns: %{order: %{uuid: uuid}}} = socket)
-      when event in [:order_updated, :order_confirmed, :order_paid, :order_cancelled] do
+      when event in [
+             :order_updated,
+             :order_confirmed,
+             :order_paid,
+             :order_refunded,
+             :order_cancelled
+           ] do
     {:noreply, refresh_order(socket)}
   end
 

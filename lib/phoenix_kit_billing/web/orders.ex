@@ -172,6 +172,7 @@ defmodule PhoenixKitBilling.Web.Orders do
              :order_updated,
              :order_confirmed,
              :order_paid,
+             :order_refunded,
              :order_cancelled
            ] do
     {:noreply, load_orders(socket)}

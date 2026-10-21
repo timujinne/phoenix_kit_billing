@@ -2454,15 +2454,23 @@ defmodule PhoenixKitBilling do
   status is not `"paid"`, or `{:error, changeset}`.
   """
   def mark_order_refunded(%Order{} = order) do
-    transition_order(order, fn current ->
-      if current.status == "paid" do
-        current
-        |> Order.status_changeset("refunded")
-        |> repo().update()
-      else
-        {:error, :order_not_refundable}
-      end
-    end)
+    result =
+      transition_order(order, fn current ->
+        if current.status == "paid" do
+          current
+          |> Order.status_changeset("refunded")
+          |> repo().update()
+        else
+          {:error, :order_not_refundable}
+        end
+      end)
+
+    # After the transaction, so subscribers never see an order that rolls back.
+    with {:ok, refunded_order} <- result do
+      Events.broadcast_order_refunded(refunded_order)
+    end
+
+    result
   end
 
   @doc """

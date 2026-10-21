@@ -7,7 +7,7 @@ defmodule PhoenixKitBilling.Events do
 
   ## Topics
 
-  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, cancelled)
+  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, refunded, cancelled)
   - `phoenix_kit:billing:invoices` - Invoice events (created, sent, paid, voided)
   - `phoenix_kit:billing:profiles` - Billing profile events (created, updated, deleted)
   - `phoenix_kit:billing:transactions` - Transaction events (created, refunded)
@@ -147,6 +147,14 @@ defmodule PhoenixKitBilling.Events do
   def broadcast_order_paid(order) do
     broadcast(@orders_topic, {:order_paid, order})
     broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_paid, order})
+  end
+
+  @doc """
+  Broadcasts order refunded event.
+  """
+  def broadcast_order_refunded(order) do
+    broadcast(@orders_topic, {:order_refunded, order})
+    broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_refunded, order})
   end
 
   @doc """
