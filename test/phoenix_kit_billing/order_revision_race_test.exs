@@ -94,6 +94,43 @@ defmodule PhoenixKitBilling.OrderRevisionRaceTest do
     refute Map.has_key?(stored.metadata, "sync")
   end
 
+  test "an invoice insert does not wait for an update that holds the order row", %{
+    order: order
+  } do
+    test_pid = self()
+
+    # Registered first, so a failing assertion cannot leave the committed
+    # invoice behind (it runs before the setup's order delete).
+    on_exit(fn ->
+      Repo.delete_all(from(i in PhoenixKitBilling.Invoice, where: i.order_uuid == ^order.uuid))
+    end)
+
+    updater =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          {:ok, _} = Billing.update_order(order, %{"notes" => "held"})
+          send(test_pid, :updated)
+
+          receive do
+            :commit -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :updated, 5_000
+
+    # The insert takes FOR KEY SHARE on the order through its foreign key; a
+    # FOR UPDATE on the order row would make it wait for the update to commit.
+    inserter = Task.async(fn -> Billing.create_invoice_from_order(order) end)
+    result = Task.yield(inserter, 2_000)
+
+    send(updater.pid, :commit)
+    assert {:ok, {:ok, :ok}} = Task.yield(updater, 5_000)
+
+    # Answered while the update still held the row, not after its commit.
+    assert {:ok, {:ok, _invoice}} = result
+  end
+
   test "an update racing a mark for the revision it read never leaves a stale mark", %{
     order: order
   } do

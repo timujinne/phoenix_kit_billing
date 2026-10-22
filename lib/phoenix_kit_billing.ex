@@ -2634,7 +2634,10 @@ defmodule PhoenixKitBilling do
   end
 
   defp write_order_sync(uuid, params) do
-    order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one()
+    # NO KEY UPDATE, like `lock_order_status/1`: it queues behind every other
+    # writer of the row but not behind the FOR KEY SHARE an invoice insert
+    # takes on it through its foreign key.
+    order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR NO KEY UPDATE") |> repo().one()
     current = order && Order.revision(order)
 
     cond do
