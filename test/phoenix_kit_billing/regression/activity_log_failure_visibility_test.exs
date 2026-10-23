@@ -25,19 +25,22 @@ defmodule PhoenixKitBilling.Regression.ActivityLogFailureVisibilityTest do
 
     log =
       capture_log(fn ->
-        spawn(fn ->
-          result =
-            Activity.log("billing.order_created",
-              actor_uuid: "01a01234-1234-7234-8234-123412341234",
-              resource_type: "order",
-              resource_uuid: "01a01234-1234-7234-8234-123412341235"
-            )
+        {pid, ref} =
+          spawn_monitor(fn ->
+            result =
+              Activity.log("billing.order_created",
+                actor_uuid: "01a01234-1234-7234-8234-123412341234",
+                resource_type: "order",
+                resource_uuid: "01a01234-1234-7234-8234-123412341235"
+              )
 
-          send(test_pid, {:result, result})
-        end)
+            send(test_pid, {:result, result})
+          end)
 
-        assert_receive {:result, result}, 1000
+        # The ownership failure can take longer than a second under load.
+        assert_receive {:result, result}, 5000
         assert {:error, %DBConnection.OwnershipError{}} = result
+        assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5000
       end)
 
     assert log =~ "Activity logging"

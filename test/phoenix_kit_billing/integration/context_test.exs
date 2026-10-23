@@ -12,6 +12,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.BillingProfile
   alias PhoenixKitBilling.Currency
+  alias PhoenixKitBilling.Events
 
   # ── Currencies ───────────────────────────────────────────────────
 
@@ -152,6 +153,57 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
 
       # paid is not payable again
       assert {:error, :order_not_payable} = Billing.mark_order_paid(paid)
+    end
+
+    test "mark_order_refunded/1 broadcasts :order_refunded on the orders and user topics",
+         %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      {:ok, confirmed} = Billing.confirm_order(order)
+      {:ok, paid} = Billing.mark_order_paid(confirmed)
+
+      Events.subscribe_orders()
+      Events.subscribe_user_orders(user.uuid)
+
+      assert {:ok, refunded} = Billing.mark_order_refunded(paid)
+      assert refunded.status == "refunded"
+
+      assert_receive {:order_refunded, %{uuid: uuid, status: "refunded"}}
+      assert uuid == order.uuid
+      assert_receive {:order_refunded, %{uuid: ^uuid}}
+    end
+
+    test "mark_order_refunded/1 broadcasts nothing for an order that is not paid", %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      Events.subscribe_orders()
+
+      assert {:error, :order_not_refundable} = Billing.mark_order_refunded(order)
+      refute_receive {:order_refunded, _}
+    end
+
+    test "record_refund/3 broadcasts :order_refunded once, and only for a full refund",
+         %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      {:ok, invoice} = Billing.create_invoice_from_order(order)
+
+      {:ok, invoice, :skipped} =
+        Billing.send_invoice(invoice, to_email: user.email, send_email: false)
+
+      {:ok, _payment} = Billing.record_payment(invoice, %{amount: invoice.total}, nil)
+      assert Billing.get_order!(order.uuid).status == "paid"
+
+      Events.subscribe_orders()
+      paid_invoice = Billing.get_invoice!(invoice.uuid)
+
+      {:ok, _partial} = Billing.record_refund(paid_invoice, %{amount: "1.00"}, nil)
+      refute_receive {:order_refunded, _}
+
+      remaining = Billing.get_invoice!(invoice.uuid)
+      {:ok, _rest} = Billing.record_refund(remaining, %{amount: remaining.paid_amount}, nil)
+
+      assert Billing.get_order!(order.uuid).status == "refunded"
+      assert_receive {:order_refunded, %{uuid: uuid, status: "refunded"}}
+      assert uuid == order.uuid
+      refute_receive {:order_refunded, _}
     end
 
     test "cancel_order/2 records reason", %{user: user} do

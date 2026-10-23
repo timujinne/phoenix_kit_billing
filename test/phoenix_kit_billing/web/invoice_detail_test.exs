@@ -108,7 +108,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetailTest do
 
     assert has_element?(
              view,
-             "a[role='menuitem'][href*='/payment/#{payment.uuid}']"
+             "a[role='menuitem'][href*='/payment-confirmation/#{payment.uuid}']"
            )
 
     assert has_element?(

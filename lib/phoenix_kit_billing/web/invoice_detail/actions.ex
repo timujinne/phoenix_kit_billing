@@ -12,6 +12,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.Activity
+  alias PhoenixKitBilling.Paths
 
   def record_payment(socket) do
     %{
@@ -81,8 +82,8 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     provider = String.to_existing_atom(provider_str)
     invoice = socket.assigns.invoice
 
-    success_url = Routes.url("/admin/billing/invoices/#{invoice.uuid}?payment=success")
-    cancel_url = Routes.url("/admin/billing/invoices/#{invoice.uuid}?payment=cancelled")
+    success_url = Routes.base_url() <> Paths.invoice_detail(invoice.uuid) <> "?payment=success"
+    cancel_url = Routes.base_url() <> Paths.invoice_detail(invoice.uuid) <> "?payment=cancelled"
 
     opts = [
       success_url: success_url,
@@ -172,7 +173,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   def send_invoice(socket) do
     invoice = socket.assigns.invoice
     email = socket.assigns.send_email
-    invoice_url = Routes.url("/admin/billing/invoices/#{invoice.uuid}/print")
+    invoice_url = Routes.base_url() <> Paths.invoice_print(invoice.uuid)
 
     case Billing.send_invoice(invoice, invoice_url: invoice_url, to_email: email) do
       {:ok, updated_invoice, email_result} ->
@@ -206,7 +207,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   def send_receipt(socket) do
     invoice = socket.assigns.invoice
     email = socket.assigns.send_receipt_email
-    receipt_url = Routes.url("/admin/billing/invoices/#{invoice.uuid}/receipt")
+    receipt_url = Routes.base_url() <> Paths.receipt_print(invoice.uuid)
 
     case Billing.send_receipt(invoice, receipt_url: receipt_url, to_email: email) do
       {:ok, updated_invoice, email_result} ->
@@ -246,8 +247,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     transaction_uuid = socket.assigns.send_credit_note_transaction_uuid
     transaction = Enum.find(socket.assigns.transactions, &(&1.uuid == transaction_uuid))
 
-    credit_note_url =
-      Routes.url("/admin/billing/invoices/#{invoice.uuid}/credit-note/#{transaction_uuid}")
+    credit_note_url = Routes.base_url() <> Paths.credit_note(invoice.uuid, transaction_uuid)
 
     with %{} <- transaction,
          {:ok, updated_transaction, email_result} <-
@@ -295,8 +295,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     transaction_uuid = socket.assigns.send_payment_confirmation_transaction_uuid
     transaction = Enum.find(socket.assigns.transactions, &(&1.uuid == transaction_uuid))
 
-    payment_url =
-      Routes.url("/admin/billing/invoices/#{invoice.uuid}/payment/#{transaction_uuid}")
+    payment_url = Routes.base_url() <> Paths.payment_confirmation(invoice.uuid, transaction_uuid)
 
     with %{} <- transaction,
          {:ok, updated_transaction, email_result} <-
