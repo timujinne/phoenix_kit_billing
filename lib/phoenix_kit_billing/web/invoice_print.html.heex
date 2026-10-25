@@ -447,14 +447,12 @@
         </div>
       </div>
 
+      <%!-- The reason is an internal note: a printout can reach the customer. --%>
       <%= if @invoice.status == "void" do %>
         <div id="invoice-void-mark" class="void-banner">
           <div class="void-mark">{gettext("VOID")}</div>
           <%= if @invoice.voided_at do %>
             <p>{gettext("Voided on %{date}", date: format_date(@invoice.voided_at))}</p>
-          <% end %>
-          <%= if reason = PhoenixKitBilling.Invoice.void_reason(@invoice) do %>
-            <p id="invoice-void-reason">{reason}</p>
           <% end %>
         </div>
       <% end %>

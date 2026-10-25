@@ -143,14 +143,22 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
   end
 
   describe "invoice print" do
-    test "a void invoice shows the VOID mark with the reason", %{conn: conn, user: user} do
+    test "a void invoice shows the VOID mark but keeps the reason off the printout", %{
+      conn: conn,
+      user: user
+    } do
       invoice = sent_invoice(user)
       {:ok, _} = Billing.void_invoice(invoice, "Issued twice by mistake")
 
-      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}/print")
+      {:ok, view, html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}/print")
 
       assert has_element?(view, "#invoice-void-mark")
-      assert has_element?(view, "#invoice-void-reason", "Issued twice by mistake")
+      refute has_element?(view, "#invoice-void-reason")
+      refute html =~ "Issued twice by mistake"
+
+      # The admin detail page, which the customer does not see, keeps it.
+      {:ok, detail, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
+      assert has_element?(detail, "#invoice-void-reason", "Issued twice by mistake")
     end
 
     test "an old void invoice shows the mark without a reason", %{conn: conn, user: user} do
