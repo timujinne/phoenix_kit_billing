@@ -231,6 +231,21 @@ lib/phoenix_kit_billing/
 Invoice status workflow: `draft → sent → paid`, with `sent → overdue → paid` and
 `→ void` as the exits.
 
+**The trash.** `Order` and `Invoice` carry `trashed_at` / `trashed_by_uuid` (V8),
+billing's own: `changeset/2` cannot set or clear them, only `trash_order/2`,
+`restore_order/2`, `trash_invoice/2` and `restore_invoice/2` do. Trash is the only
+"delete" the admin UI has; nothing purges it. Only a `draft` or `cancelled` order
+without an open invoice (neither void nor in the trash) can be trashed, and only
+a `draft` invoice that was never sent - an issued invoice is voided. The status
+does not change, no email goes out, and the number stays used. A trashed order or
+invoice refuses every change with `:order_trashed` / `:invoice_trashed`
+(`get_order/2`, `get_invoice/2` and the lookups by number still find it);
+`put_order_sync/2` still takes an external system's mark. Every listing, count and
+the dashboard leave the trash out by default (`trashed: :only | :include`
+brings it back), and so do a customer's orders, the invoices preloaded on them
+and `get_order_by_uuid/2`. An invoice cannot be created for, or restored onto,
+an order in the trash: both lock the order row against `trash_order/2`.
+
 ### Contexts and services
 
 - **`PhoenixKitBilling`** — system config, and CRUD plus lifecycle for orders,
@@ -274,6 +289,12 @@ observe a stale entry.
 `phoenix_kit:billing:orders`, `:invoices`, `:profiles`, `:transactions`,
 `:credit_notes`, `:subscriptions`, `:currencies`. Every topic also supports a
 per-user form with a `:user:<user_uuid>` suffix.
+
+Trashing announces `{:order_trashed, order}` / `{:order_restored, order}` and
+`{:invoice_trashed, invoice}` / `{:invoice_restored, invoice}` on the order and
+invoice topics - and nothing else with them: not `:order_updated`, `:order_cancelled`
+or `:invoice_voided`, and no durable `InvoiceEvents` event. A subscriber with a
+strict `handle_info/2` needs a catch-all clause for these.
 
 ### Permissions
 
@@ -366,7 +387,7 @@ in `README.md`.
 
 Owns a versioned chain: `PhoenixKitBilling.Migrations` via `migration_module/0`,
 marker `pkb_schema:<N>` as a `COMMENT ON TABLE
-phoenix_kit_payment_provider_configs`, currently **V7**. A marker-less table reads
+phoenix_kit_payment_provider_configs`, currently **V8**. A marker-less table reads
 as version 0 (the core-baseline shape). `mix phoenix_kit.update` applies the chain
 in hosts; the test suite applies it by executing
 `Migrations.up_statements/2` as data (see Testing).
@@ -420,6 +441,11 @@ in hosts; the test suite applies it by executing
   until its transaction ends; the lock order and the rules for calling a create
   inside your own transaction are in the V7 section of the `Migrations`
   moduledoc and the `@doc`s.
+- **V8 adds the trash**: `trashed_at` and `trashed_by_uuid` (no foreign key) on
+  `phoenix_kit_orders` and `phoenix_kit_invoices`, plus a partial index per table
+  over the rows not in the trash and one over the rows that are. `down/1` below V8
+  drops the four columns and four indexes - never a table - so what was in the
+  trash reads as not trashed again.
 - **V5 lets a payer be a billing email instead of an account**:
   `phoenix_kit_invoices.user_uuid` and `phoenix_kit_transactions.user_uuid`
   drop `NOT NULL`, and `phoenix_kit_invoices_payer_check` requires a user or a
@@ -430,7 +456,8 @@ in hosts; the test suite applies it by executing
 - **`down/1` never drops a core-created table.** It unstamps the marker and reverses the
   objects a version added (V3's columns, V2's index and columns). The tables are
   core-created; only core's own baseline rollback may drop them (V7's counter table,
-  which this chain created, is the one `down/1` drops).
+  which this chain created, is the one `down/1` drops; V8's columns and indexes on
+  core's orders and invoices tables are dropped, the tables never).
 - A version that changes the shape of a core-created table can put core's
   `ExpectedSchema` manifest out of date — coordinate before adding one, do not
   assume silence means agreement. Core's own chain no longer touches module
