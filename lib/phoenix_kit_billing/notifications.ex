@@ -106,17 +106,30 @@ defmodule PhoenixKitBilling.Notifications do
   Admin-only: the customer already saw the failure in the checkout flow,
   and a second channel telling them their card was declined is noise at
   best. Operators need it, because a failed payment is work.
+
+  The reason `:invoice_void` is a payment the provider CONFIRMED for an
+  invoice that was voided meanwhile: it was not recorded and needs refunding
+  at the provider.
   """
   def payment_failed(invoice, reason) do
     safely(fn ->
       notify_admins(
         "billing.manage_invoices",
         @payment_failed_action,
-        "Payment failed for #{number(invoice)}: #{truncate(to_string(reason), 100)}",
+        payment_failed_text(invoice, reason),
         "hero-exclamation-triangle",
         Routes.path("/admin/billing/invoices")
       )
     end)
+  end
+
+  defp payment_failed_text(invoice, :invoice_void) do
+    "A payment arrived for void invoice #{number(invoice)} and was not recorded - " <>
+      "refund it at the payment provider"
+  end
+
+  defp payment_failed_text(invoice, reason) do
+    "Payment failed for #{number(invoice)}: #{truncate(to_string(reason), 100)}"
   end
 
   defp notify_admins(permission_key, action, text, icon, link) do

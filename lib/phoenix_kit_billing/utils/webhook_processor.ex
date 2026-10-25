@@ -215,6 +215,21 @@ defmodule PhoenixKitBilling.WebhookProcessor do
         Logger.debug("Invoice #{invoice_uuid} already paid")
         {:ok, :already_paid}
 
+      # The customer was charged for an invoice that was voided meanwhile.
+      # Recording it would put money on a void document, and failing the event
+      # would have the provider retry it to the limit with the charge visible
+      # only in a log line. So: nothing is recorded, the event is answered as
+      # handled, and the operators get the one thing only they can act on - the
+      # charge needs refunding at the provider.
+      {:error, {:invoice_void, invoice}} ->
+        Logger.error(
+          "Payment received for void invoice #{invoice.invoice_number} (#{invoice.uuid}); " <>
+            "not recorded - refund it at the provider: #{inspect(data)}"
+        )
+
+        _ = Notifications.payment_failed(invoice, :invoice_void)
+        {:ok, :invoice_void}
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -506,6 +521,10 @@ defmodule PhoenixKitBilling.WebhookProcessor do
 
   defp validate_invoice_status(%{status: "paid"}) do
     {:error, :already_paid}
+  end
+
+  defp validate_invoice_status(%Invoice{status: "void"} = invoice) do
+    {:error, {:invoice_void, invoice}}
   end
 
   # Delegates to `Invoice.payable?/1` rather than repeating the status list.
