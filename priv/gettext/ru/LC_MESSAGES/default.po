@@ -4786,3 +4786,195 @@ msgstr "Платёж получен после аннулирования — в
 #, elixir-autogen, elixir-format
 msgid "This invoice has not been voided."
 msgstr "Этот счёт не аннулирован."
+
+#: lib/phoenix_kit_billing/web/orders.html.heex:7
+#, elixir-autogen, elixir-format
+msgid "%{count} orders in the trash"
+msgstr "В корзине заказов: %{count}"
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:7
+#, elixir-autogen, elixir-format
+msgid "%{count} invoices in the trash"
+msgstr "В корзине счетов: %{count}"
+
+#: lib/phoenix_kit_billing/web/components/trash_mark.ex:45
+#, elixir-autogen, elixir-format
+msgid "By %{user}"
+msgstr "Пользователь: %{user}"
+
+#: lib/phoenix_kit_billing/web/invoice_detail/actions.ex:428
+#, elixir-autogen, elixir-format
+msgid "Failed to move the invoice to the trash: %{reason}"
+msgstr "Не удалось переместить счёт в корзину: %{reason}"
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:276
+#, elixir-autogen, elixir-format
+msgid "Failed to move the order to the trash: %{reason}"
+msgstr "Не удалось переместить заказ в корзину: %{reason}"
+
+#: lib/phoenix_kit_billing/web/invoice_detail/actions.ex:459
+#, elixir-autogen, elixir-format
+msgid "Failed to restore the invoice: %{reason}"
+msgstr "Не удалось восстановить счёт: %{reason}"
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:320
+#, elixir-autogen, elixir-format
+msgid "Failed to restore the order: %{reason}"
+msgstr "Не удалось восстановить заказ: %{reason}"
+
+#: lib/phoenix_kit_billing/web/components/trash_mark.ex:23
+#: lib/phoenix_kit_billing/web/components/trash_mark.ex:41
+#, elixir-autogen, elixir-format
+msgid "In trash"
+msgstr "В корзине"
+
+#: lib/phoenix_kit_billing/web/invoice_detail/actions.ex:419
+#, elixir-autogen, elixir-format
+msgid "Invoice moved to the trash"
+msgstr "Счёт перемещён в корзину"
+
+#: lib/phoenix_kit_billing/web/invoice_detail/actions.ex:450
+#, elixir-autogen, elixir-format
+msgid "Invoice restored from the trash"
+msgstr "Счёт восстановлен из корзины"
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:51
+#, elixir-autogen, elixir-format
+msgid "Invoices you move to the trash are kept here until you restore them"
+msgstr "Счета, перемещённые в корзину, хранятся здесь, пока вы их не восстановите"
+
+#: lib/phoenix_kit_billing/web/orders.html.heex:59
+#, elixir-autogen, elixir-format
+msgid "Orders you move to the trash are kept here until you restore them"
+msgstr "Заказы, перемещённые в корзину, хранятся здесь, пока вы их не восстановите"
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1110
+#, elixir-autogen, elixir-format
+msgid "Move invoice %{number} to the trash?"
+msgstr "Переместить счёт %{number} в корзину?"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:429
+#, elixir-autogen, elixir-format
+msgid "Move order %{number} to the trash?"
+msgstr "Переместить заказ %{number} в корзину?"
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1108
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1124
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:141
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:427
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:443
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:71
+#, elixir-autogen, elixir-format
+msgid "Move to trash"
+msgstr "Переместить в корзину"
+
+#: lib/phoenix_kit_billing/web/components/trash_mark.ex:43
+#, elixir-autogen, elixir-format
+msgid "Moved to the trash"
+msgstr "Перемещено в корзину"
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1114
+#, elixir-autogen, elixir-format
+msgid "Nothing is deleted. The invoice number stays used and is never given to another invoice. Only a draft that was never sent can be moved to the trash; to cancel an issued invoice, void it instead."
+msgstr "Ничего не удаляется. Номер счёта остаётся занятым и никогда не достанется другому счёту. В корзину можно переместить только черновик, который не отправляли; выставленный счёт аннулируйте."
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:433
+#, elixir-autogen, elixir-format
+msgid "Nothing is deleted. The order keeps its status and number and stays in the trash until you restore it."
+msgstr "Ничего не удаляется. Заказ сохраняет статус и номер и остаётся в корзине, пока вы его не восстановите."
+
+#: lib/phoenix_kit_billing/errors.ex:155
+#, elixir-autogen, elixir-format
+msgid "Only a draft invoice that was never sent can be moved to the trash. Void an issued invoice instead."
+msgstr "В корзину можно переместить только черновик счёта, который не отправляли. Выставленный счёт аннулируйте."
+
+#: lib/phoenix_kit_billing/errors.ex:203
+#, elixir-autogen, elixir-format
+msgid "Only a draft or cancelled order can be moved to the trash."
+msgstr "В корзину можно переместить только черновик или отменённый заказ."
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:267
+#, elixir-autogen, elixir-format
+msgid "Order moved to the trash"
+msgstr "Заказ перемещён в корзину"
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:311
+#, elixir-autogen, elixir-format
+msgid "Order restored from the trash"
+msgstr "Заказ восстановлен из корзины"
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1137
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1148
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:22
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:22
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:456
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:467
+#, elixir-autogen, elixir-format
+msgid "Restore"
+msgstr "Восстановить"
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:1139
+#, elixir-autogen, elixir-format
+msgid "Restore invoice %{number} from the trash?"
+msgstr "Восстановить счёт %{number} из корзины?"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:458
+#, elixir-autogen, elixir-format
+msgid "Restore order %{number} from the trash?"
+msgstr "Восстановить заказ %{number} из корзины?"
+
+#: lib/phoenix_kit_billing/web/components/trash_mark.ex:46
+#, elixir-autogen, elixir-format
+msgid "Restore it to work with it again."
+msgstr "Восстановите его, чтобы снова с ним работать."
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:49
+#: lib/phoenix_kit_billing/web/orders.html.heex:57
+#, elixir-autogen, elixir-format
+msgid "The trash is empty"
+msgstr "Корзина пуста"
+
+#: lib/phoenix_kit_billing/errors.ex:164
+#, elixir-autogen, elixir-format
+msgid "This invoice is in the trash. Restore it to change it."
+msgstr "Этот счёт в корзине. Восстановите его, чтобы изменить."
+
+#: lib/phoenix_kit_billing/errors.ex:193
+#, elixir-autogen, elixir-format
+msgid "This order has an invoice that is neither void nor in the trash."
+msgstr "У заказа есть счёт, который не аннулирован и не в корзине."
+
+#: lib/phoenix_kit_billing/errors.ex:205
+#, elixir-autogen, elixir-format
+msgid "This order is in the trash. Restore it to change it."
+msgstr "Этот заказ в корзине. Восстановите его, чтобы изменить."
+
+#: lib/phoenix_kit_billing/errors.ex:113
+#, elixir-autogen, elixir-format
+msgid "This record is already in the trash."
+msgstr "Эта запись уже в корзине."
+
+#: lib/phoenix_kit_billing/errors.ex:187
+#, elixir-autogen, elixir-format
+msgid "This record is not in the trash."
+msgstr "Эта запись не в корзине."
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:34
+#: lib/phoenix_kit_billing/web/orders.html.heex:42
+#, elixir-autogen, elixir-format
+msgid "Trash"
+msgstr "Корзина"
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:104
+#: lib/phoenix_kit_billing/web/invoices.html.heex:170
+#: lib/phoenix_kit_billing/web/orders.html.heex:107
+#: lib/phoenix_kit_billing/web/orders.html.heex:178
+#, elixir-autogen, elixir-format
+msgid "Trashed"
+msgstr "Перемещено"
+
+#: lib/phoenix_kit_billing/web/invoices.html.heex:171
+#: lib/phoenix_kit_billing/web/orders.html.heex:179
+#, elixir-autogen, elixir-format
+msgid "Trashed by"
+msgstr "Кто переместил"

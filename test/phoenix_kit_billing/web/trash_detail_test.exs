@@ -271,6 +271,43 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
     end
   end
 
+  describe "in the admin's language" do
+    test "the order page says it in Ukrainian and in Russian", %{conn: conn, user: user} do
+      order = order(user)
+
+      {:ok, view, _html} =
+        conn |> put_test_locale("uk") |> live("/en/admin/billing/orders/#{order.uuid}")
+
+      assert has_element?(view, "#trash-order-button", "Перемістити в кошик")
+
+      {:ok, trashed} = Billing.trash_order(order)
+
+      {:ok, view, _html} =
+        conn |> put_test_locale("uk") |> live("/en/admin/billing/orders/#{trashed.uuid}")
+
+      assert has_element?(view, "#order-trashed-badge", "У кошику")
+      assert has_element?(view, "#restore-order-button", "Відновити")
+
+      {:ok, view, _html} =
+        conn |> put_test_locale("ru") |> live("/en/admin/billing/orders/#{trashed.uuid}")
+
+      assert has_element?(view, "#order-trashed-badge", "В корзине")
+      assert has_element?(view, "#restore-order-button", "Восстановить")
+    end
+
+    test "the lists name the tab", %{conn: conn} do
+      {:ok, view, _html} =
+        conn |> put_test_locale("uk") |> live("/admin/billing/invoices")
+
+      assert has_element?(view, "#invoices-tab-trash", "Кошик")
+
+      {:ok, view, _html} =
+        conn |> put_test_locale("ru") |> live("/admin/billing/orders")
+
+      assert has_element?(view, "#orders-tab-trash", "Корзина")
+    end
+  end
+
   describe "order detail: the invoices shown" do
     test "an invoice in the trash is not listed on its order", %{conn: conn, user: user} do
       order = order(user)
