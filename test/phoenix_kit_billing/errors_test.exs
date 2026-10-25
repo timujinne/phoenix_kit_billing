@@ -275,6 +275,48 @@ defmodule PhoenixKitBilling.ErrorsTest do
       do: assert(Errors.message(:unknown_event) == "The webhook event type is not recognized.")
   end
 
+  describe "message/1 for the trash" do
+    test ":already_trashed",
+      do: assert(Errors.message(:already_trashed) == "This record is already in the trash.")
+
+    test ":not_trashed",
+      do: assert(Errors.message(:not_trashed) == "This record is not in the trash.")
+
+    test ":order_trashed",
+      do:
+        assert(
+          Errors.message(:order_trashed) == "This order is in the trash. Restore it to change it."
+        )
+
+    test ":invoice_trashed",
+      do:
+        assert(
+          Errors.message(:invoice_trashed) ==
+            "This invoice is in the trash. Restore it to change it."
+        )
+
+    test ":order_not_trashable",
+      do:
+        assert(
+          Errors.message(:order_not_trashable) ==
+            "Only a draft or cancelled order can be moved to the trash."
+        )
+
+    test ":invoice_not_trashable",
+      do:
+        assert(
+          Errors.message(:invoice_not_trashable) ==
+            "Only a draft invoice that was never sent can be moved to the trash. Void an issued invoice instead."
+        )
+
+    test ":order_has_open_invoices",
+      do:
+        assert(
+          Errors.message(:order_has_open_invoices) ==
+            "This order has an invoice that is neither void nor in the trash."
+        )
+  end
+
   describe "message/1 fallbacks" do
     test "passes strings through unchanged" do
       assert Errors.message("custom provider message") == "custom provider message"

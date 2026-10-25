@@ -32,6 +32,7 @@ defmodule PhoenixKitBilling.Errors do
   @type error ::
           :already_paid
           | :already_refunded
+          | :already_trashed
           | :authentication_failed
           | :can_only_delete_drafts
           | :card_declined
@@ -54,8 +55,10 @@ defmodule PhoenixKitBilling.Errors do
           | :invoice_not_paid
           | :invoice_not_payable
           | :invoice_not_sendable
+          | :invoice_not_trashable
           | :invoice_not_void
           | :invoice_not_voidable
+          | :invoice_trashed
           | :is_default
           | :max_retries_exceeded
           | :missing_reference
@@ -74,11 +77,15 @@ defmodule PhoenixKitBilling.Errors do
           | :not_payable
           | :not_refundable
           | :not_supported
+          | :not_trashed
           | :order_has_invoices
+          | :order_has_open_invoices
           | :order_not_cancellable
           | :order_not_editable
           | :order_not_payable
           | :order_not_refundable
+          | :order_not_trashable
+          | :order_trashed
           | :payment_method_expired
           | :payment_method_not_usable
           | :processing_error
@@ -102,6 +109,8 @@ defmodule PhoenixKitBilling.Errors do
   @spec message(error() | term()) :: String.t()
   def message(:already_paid), do: gettext("This has already been paid.")
   def message(:already_refunded), do: gettext("This payment has already been refunded.")
+
+  def message(:already_trashed), do: gettext("This record is already in the trash.")
 
   def message(:authentication_failed),
     do: gettext("Authentication with the payment provider failed.")
@@ -140,10 +149,19 @@ defmodule PhoenixKitBilling.Errors do
   def message(:invoice_not_sendable),
     do: gettext("This invoice cannot be sent in its current state.")
 
+  def message(:invoice_not_trashable),
+    do:
+      gettext(
+        "Only a draft invoice that was never sent can be moved to the trash. Void an issued invoice instead."
+      )
+
   def message(:invoice_not_void), do: gettext("This invoice has not been voided.")
 
   def message(:invoice_not_voidable),
     do: gettext("This invoice cannot be voided in its current state.")
+
+  def message(:invoice_trashed),
+    do: gettext("This invoice is in the trash. Restore it to change it.")
 
   def message(:is_default), do: gettext("The default item cannot be removed.")
 
@@ -166,9 +184,13 @@ defmodule PhoenixKitBilling.Errors do
   def message(:not_payable), do: gettext("This record cannot be paid in its current state.")
   def message(:not_refundable), do: gettext("This record cannot be refunded.")
   def message(:not_supported), do: gettext("This operation is not supported.")
+  def message(:not_trashed), do: gettext("This record is not in the trash.")
 
   def message(:order_has_invoices),
     do: gettext("This order has invoices and cannot be deleted.")
+
+  def message(:order_has_open_invoices),
+    do: gettext("This order has an invoice that is neither void nor in the trash.")
 
   def message(:order_not_cancellable),
     do: gettext("This order cannot be cancelled in its current state.")
@@ -176,6 +198,11 @@ defmodule PhoenixKitBilling.Errors do
   def message(:order_not_editable), do: gettext("This order can no longer be edited.")
   def message(:order_not_payable), do: gettext("This order cannot be paid in its current state.")
   def message(:order_not_refundable), do: gettext("This order cannot be refunded.")
+
+  def message(:order_not_trashable),
+    do: gettext("Only a draft or cancelled order can be moved to the trash.")
+
+  def message(:order_trashed), do: gettext("This order is in the trash. Restore it to change it.")
   def message(:payment_method_expired), do: gettext("The payment method has expired.")
   def message(:payment_method_not_usable), do: gettext("This payment method cannot be used.")
   def message(:processing_error), do: gettext("An error occurred while processing the payment.")

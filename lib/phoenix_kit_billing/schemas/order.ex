@@ -60,6 +60,15 @@ defmodule PhoenixKitBilling.Order do
   order as `"pending"` again (keeping the external id and number it already
   has), so the external system knows to take it again.
 
+  ## Trash
+
+  `trashed_at` and `trashed_by_uuid` say when and by whom an order was moved to
+  the trash (`nil` while it is not in it). They are billing's own: `changeset/2`
+  cannot set or clear them, only `PhoenixKitBilling.trash_order/2` and
+  `restore_order/2` write them. Only a `draft` or `cancelled` order can be
+  trashed, and the status does not change. A trashed order refuses every
+  change until it is restored.
+
   ## Status Workflow
 
   ```
@@ -159,6 +168,11 @@ defmodule PhoenixKitBilling.Order do
     field(:confirmed_at, :utc_datetime)
     field(:paid_at, :utc_datetime)
     field(:cancelled_at, :utc_datetime)
+
+    # Billing's own: written by `PhoenixKitBilling.trash_order/2` and
+    # `restore_order/2` only, never cast from params.
+    field(:trashed_at, :utc_datetime)
+    field(:trashed_by_uuid, UUIDv7)
 
     # User reference (cross-package — FK constraint in core migrations)
     field(:user_uuid, UUIDv7)
@@ -646,16 +660,52 @@ defmodule PhoenixKitBilling.Order do
   @doc """
   Checks if order can be edited (is in draft or pending status).
   """
+  def editable?(%__MODULE__{trashed_at: %DateTime{}}), do: false
   def editable?(%__MODULE__{status: status}) when status in ~w(draft pending), do: true
   def editable?(_), do: false
 
   @doc """
   Checks if order can be cancelled.
   """
+  def cancellable?(%__MODULE__{trashed_at: %DateTime{}}), do: false
+
   def cancellable?(%__MODULE__{status: status}) when status in ~w(draft pending confirmed),
     do: true
 
   def cancellable?(_), do: false
+
+  @doc """
+  Checks if the order is in the trash.
+  """
+  def trashed?(%__MODULE__{trashed_at: %DateTime{}}), do: true
+  def trashed?(%__MODULE__{}), do: false
+
+  @doc """
+  Checks if the order's status allows moving it to the trash (`draft` or
+  `cancelled`) and it is not in it already. Whether it still has an open invoice
+  is a question for the database: `PhoenixKitBilling.trash_order/2` asks it.
+  """
+  def trashable?(%__MODULE__{status: status, trashed_at: nil}) when status in ~w(draft cancelled),
+    do: true
+
+  def trashable?(%__MODULE__{}), do: false
+
+  @doc """
+  Changeset that moves an order to the trash. `actor_uuid` is the user who does
+  it, or `nil`. It changes nothing else: not the status, not `metadata`, not the
+  revision an external system reads. Written here and by `restore_changeset/1`
+  only: `changeset/2` cannot set these fields.
+  """
+  def trash_changeset(%__MODULE__{} = order, actor_uuid) do
+    change(order, trashed_at: UtilsDate.utc_now(), trashed_by_uuid: actor_uuid)
+  end
+
+  @doc """
+  Changeset that takes an order out of the trash.
+  """
+  def restore_changeset(%__MODULE__{} = order) do
+    change(order, trashed_at: nil, trashed_by_uuid: nil)
+  end
 
   @doc """
   Checks if order can be marked as paid.

@@ -7,8 +7,8 @@ defmodule PhoenixKitBilling.Events do
 
   ## Topics
 
-  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, refunded, cancelled)
-  - `phoenix_kit:billing:invoices` - Invoice events (created, sent, paid, voided)
+  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, refunded, cancelled, trashed, restored)
+  - `phoenix_kit:billing:invoices` - Invoice events (created, sent, paid, voided, trashed, restored)
   - `phoenix_kit:billing:profiles` - Billing profile events (created, updated, deleted)
   - `phoenix_kit:billing:transactions` - Transaction events (created, refunded)
   - `phoenix_kit:billing:credit_notes` - Credit note events (sent, applied)
@@ -165,6 +165,24 @@ defmodule PhoenixKitBilling.Events do
     broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_cancelled, order})
   end
 
+  @doc """
+  Broadcasts order trashed event. Trashing changes nothing else about the
+  order, so it is announced on its own: no `:order_updated` or
+  `:order_cancelled` goes with it.
+  """
+  def broadcast_order_trashed(order) do
+    broadcast(@orders_topic, {:order_trashed, order})
+    broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_trashed, order})
+  end
+
+  @doc """
+  Broadcasts order restored event (the order left the trash).
+  """
+  def broadcast_order_restored(order) do
+    broadcast(@orders_topic, {:order_restored, order})
+    broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_restored, order})
+  end
+
   # ============================================
   # INVOICE BROADCASTS
   # ============================================
@@ -199,6 +217,24 @@ defmodule PhoenixKitBilling.Events do
   def broadcast_invoice_voided(invoice) do
     broadcast(@invoices_topic, {:invoice_voided, invoice})
     broadcast("#{@invoices_topic}:user:#{invoice.user_uuid}", {:invoice_voided, invoice})
+  end
+
+  @doc """
+  Broadcasts invoice trashed event. Like `broadcast_order_trashed/1`, it goes
+  alone: no `:invoice_voided` or other event comes with it, and the durable
+  `PhoenixKitBilling.InvoiceEvents` are not involved.
+  """
+  def broadcast_invoice_trashed(invoice) do
+    broadcast(@invoices_topic, {:invoice_trashed, invoice})
+    broadcast("#{@invoices_topic}:user:#{invoice.user_uuid}", {:invoice_trashed, invoice})
+  end
+
+  @doc """
+  Broadcasts invoice restored event (the invoice left the trash).
+  """
+  def broadcast_invoice_restored(invoice) do
+    broadcast(@invoices_topic, {:invoice_restored, invoice})
+    broadcast("#{@invoices_topic}:user:#{invoice.user_uuid}", {:invoice_restored, invoice})
   end
 
   # ============================================

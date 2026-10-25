@@ -29,6 +29,13 @@ defmodule PhoenixKitBilling.Invoice do
   - `receipt_generated_at`: When receipt was generated
   - `receipt_data`: Additional receipt data (PDF URL, etc.)
 
+  ### Trash
+  - `trashed_at`, `trashed_by_uuid`: when and by whom a draft invoice was moved
+    to the trash (`nil` while it is not in it). Billing's own: `changeset/2`
+    cannot set or clear them, only `PhoenixKitBilling.trash_invoice/2` and
+    `restore_invoice/2` write them. Only a draft that was never sent can be
+    trashed; an issued invoice is voided instead.
+
   ## Status Workflow
 
   ```
@@ -97,6 +104,11 @@ defmodule PhoenixKitBilling.Invoice do
     field(:sent_at, :utc_datetime)
     field(:paid_at, :utc_datetime)
     field(:voided_at, :utc_datetime)
+
+    # Billing's own: written by `PhoenixKitBilling.trash_invoice/2` and
+    # `restore_invoice/2` only, never cast from params.
+    field(:trashed_at, :utc_datetime)
+    field(:trashed_by_uuid, UUIDv7)
 
     # User reference (cross-package — FK constraint in core migrations)
     field(:user_uuid, UUIDv7)
@@ -415,13 +427,13 @@ defmodule PhoenixKitBilling.Invoice do
   @doc """
   Checks if invoice can be edited.
   """
-  def editable?(%__MODULE__{status: "draft"}), do: true
+  def editable?(%__MODULE__{status: "draft", trashed_at: nil}), do: true
   def editable?(_), do: false
 
   @doc """
   Checks if invoice can be sent (first time - changes status to sent).
   """
-  def sendable?(%__MODULE__{status: "draft"}), do: true
+  def sendable?(%__MODULE__{status: "draft", trashed_at: nil}), do: true
   def sendable?(_), do: false
 
   @doc """
@@ -439,14 +451,46 @@ defmodule PhoenixKitBilling.Invoice do
   @doc """
   Checks if invoice can be voided.
   """
+  def voidable?(%__MODULE__{trashed_at: %DateTime{}}), do: false
   def voidable?(%__MODULE__{status: status}) when status in ~w(draft sent overdue), do: true
   def voidable?(_), do: false
 
   @doc """
-  Checks if an invoice still counts against its order: it has not been voided.
+  Checks if an invoice still counts against its order: it has not been voided
+  and is not in the trash.
   """
   def open?(%__MODULE__{status: "void"}), do: false
+  def open?(%__MODULE__{trashed_at: %DateTime{}}), do: false
   def open?(%__MODULE__{}), do: true
+
+  @doc """
+  Checks if the invoice is in the trash.
+  """
+  def trashed?(%__MODULE__{trashed_at: %DateTime{}}), do: true
+  def trashed?(%__MODULE__{}), do: false
+
+  @doc """
+  Checks if the invoice can be moved to the trash: a draft that was never sent
+  and is not in it already. An issued invoice is voided, never trashed.
+  """
+  def trashable?(%__MODULE__{status: "draft", sent_at: nil, trashed_at: nil}), do: true
+  def trashable?(%__MODULE__{}), do: false
+
+  @doc """
+  Changeset that moves an invoice to the trash. `actor_uuid` is the user who
+  does it, or `nil`. Written here and by `restore_changeset/1` only:
+  `changeset/2` cannot set these fields.
+  """
+  def trash_changeset(%__MODULE__{} = invoice, actor_uuid) do
+    change(invoice, trashed_at: UtilsDate.utc_now(), trashed_by_uuid: actor_uuid)
+  end
+
+  @doc """
+  Changeset that takes an invoice out of the trash.
+  """
+  def restore_changeset(%__MODULE__{} = invoice) do
+    change(invoice, trashed_at: nil, trashed_by_uuid: nil)
+  end
 
   @doc """
   The reason a void invoice was voided with, from `metadata["void"]`, or `nil`
