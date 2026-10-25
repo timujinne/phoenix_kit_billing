@@ -128,6 +128,16 @@ defmodule PhoenixKitBilling.Regression.WebhookVoidInvoiceTest do
     assert Decimal.equal?(Decimal.new(amount), 100)
   end
 
+  test "the charge keeps the currency the webhook reports", %{invoice: invoice} do
+    {:ok, _voided} = Billing.void_invoice(invoice)
+
+    event = put_in(payment_event(invoice, "evt_void_usd").data[:currency], "USD")
+    capture_log(fn -> assert {:ok, :invoice_void} = WebhookProcessor.process(event) end)
+
+    assert [%{"currency" => "USD"}] =
+             Billing.get_invoice!(invoice.uuid).metadata["void"]["payments_after_void"]
+  end
+
   test "the admins' notification leads to the invoice itself", %{admin: admin, invoice: invoice} do
     {:ok, _voided} = Billing.void_invoice(invoice)
     capture_log(fn -> WebhookProcessor.process(payment_event(invoice, "evt_void_link")) end)

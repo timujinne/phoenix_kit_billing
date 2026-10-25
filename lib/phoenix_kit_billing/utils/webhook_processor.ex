@@ -252,7 +252,8 @@ defmodule PhoenixKitBilling.WebhookProcessor do
       provider: data[:provider] || "stripe",
       charge_id: data[:charge_id] || data[:payment_intent_id],
       amount: amount,
-      currency: invoice.currency,
+      # The webhook's own currency when it names one: it is what was charged.
+      currency: data[:currency] || invoice.currency,
       event_id: event_id
     }
 
