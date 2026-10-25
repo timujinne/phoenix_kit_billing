@@ -42,7 +42,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     alias PhoenixKit.Migrations.Postgres.Helpers
 
     test "current_version/0 and version_table/0" do
-      assert Migrations.current_version() == 6
+      assert Migrations.current_version() == 7
       assert Migrations.version_table() == "phoenix_kit_payment_provider_configs"
     end
 
@@ -172,6 +172,26 @@ defmodule PhoenixKitBilling.MigrationsTest do
              ]
     end
 
+    test "V7 creates the module-owned number sequences table" do
+      v7_only =
+        (Migrations.up_statements("public", 7) -- Migrations.up_statements("public", 6))
+        |> normalised()
+
+      assert v7_only == [
+               "CREATE TABLE IF NOT EXISTS public.phoenix_kit_billing_number_sequences ( scope character varying(32) NOT NULL, year integer NOT NULL, last_value bigint NOT NULL, updated_at timestamp with time zone DEFAULT now() NOT NULL, PRIMARY KEY (scope, year) )",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'"
+             ]
+
+      assert Migrations.up_statements("billing_alt", 7)
+             |> Enum.any?(
+               &(&1 =~
+                   "CREATE TABLE IF NOT EXISTS billing_alt.phoenix_kit_billing_number_sequences")
+             )
+
+      # A target below 7 builds the chain as it was.
+      refute Migrations.up_statements("public", 6) |> Enum.any?(&(&1 =~ "number_sequences"))
+    end
+
     # V4 is NOT yet published — nothing has shipped that could be split
     # from a fresh install by editing it, so the stakes here are "catch an
     # accidental edit while working on something else", not "protect a
@@ -220,7 +240,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
       statements = Migrations.up_statements()
 
       assert List.last(statements) ==
-               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'",
              "the marker must be stamped after the DDL it certifies, not before"
     end
 
@@ -308,6 +328,11 @@ defmodule PhoenixKitBilling.MigrationsTest do
       v5_undo_public = v5_undo("public")
       v5_undo_alt = v5_undo("billing_alt")
 
+      # V7's table is created by this chain (not by core), so rolling back
+      # below V7 is the one place the chain drops a table.
+      v7_drop_public = ["DROP TABLE IF EXISTS public.phoenix_kit_billing_number_sequences"]
+      v7_drop_alt = ["DROP TABLE IF EXISTS billing_alt.phoenix_kit_billing_number_sequences"]
+
       v3_drops_public = [
         "ALTER TABLE public.phoenix_kit_orders DROP COLUMN IF EXISTS base_currency",
         "ALTER TABLE public.phoenix_kit_orders DROP COLUMN IF EXISTS exchange_rate",
@@ -333,13 +358,15 @@ defmodule PhoenixKitBilling.MigrationsTest do
       ]
 
       assert Migrations.down_statements("public", 0) ==
-               v5_undo_public ++
+               v7_drop_public ++
+                 v5_undo_public ++
                  v3_drops_public ++
                  v2_drops_public ++
                  ["COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS NULL"]
 
       assert Migrations.down_statements("public", 1) ==
-               v5_undo_public ++
+               v7_drop_public ++
+                 v5_undo_public ++
                  v3_drops_public ++
                  v2_drops_public ++
                  [
@@ -347,7 +374,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
                  ]
 
       assert Migrations.down_statements("billing_alt", 0) ==
-               v5_undo_alt ++
+               v7_drop_alt ++
+                 v5_undo_alt ++
                  v3_drops_alt ++
                  v2_drops_alt ++
                  ["COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS NULL"]
@@ -355,7 +383,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
       # target 2: below V3, so the orders columns still get dropped, but
       # the currencies index/columns (added at V2, kept at target >= 2) do not.
       assert Migrations.down_statements("billing_alt", 2) ==
-               v5_undo_alt ++
+               v7_drop_alt ++
+                 v5_undo_alt ++
                  v3_drops_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:2'"
@@ -363,7 +392,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
       # target 3: V3's own additions are kept; only V5 is undone.
       assert Migrations.down_statements("billing_alt", 3) ==
-               v5_undo_alt ++
+               v7_drop_alt ++
+                 v5_undo_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:3'"
                  ]
@@ -371,21 +401,31 @@ defmodule PhoenixKitBilling.MigrationsTest do
       # target 4: V5 undone. V4 itself is pure adoption (like V1) — it
       # changes no shape of its own, so it contributes nothing to drop.
       assert Migrations.down_statements("billing_alt", 4) ==
-               v5_undo_alt ++
+               v7_drop_alt ++
+                 v5_undo_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:4'"
                  ]
 
-      # target 5: V6 undone — it adopted tables, so nothing to drop, marker only.
+      # target 5: V6 undone — it adopted tables, so nothing of its own to drop;
+      # V7's table still goes.
       assert Migrations.down_statements("billing_alt", 5) ==
-               [
-                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:5'"
-               ]
+               v7_drop_alt ++
+                 [
+                   "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:5'"
+                 ]
 
-      # target 6 == current_version: nothing to undo, marker only.
+      # target 6: only V7 undone.
       assert Migrations.down_statements("billing_alt", 6) ==
+               v7_drop_alt ++
+                 [
+                   "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'"
+                 ]
+
+      # target 7 == current_version: nothing to undo, marker only.
+      assert Migrations.down_statements("billing_alt", 7) ==
                [
-                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'"
+                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'"
                ]
     end
 
@@ -587,8 +627,12 @@ defmodule PhoenixKitBilling.MigrationsTest do
                  "up_statements(#{inspect(prefix)}) contains: #{stmt}"
         end
 
-        for target <- [0, 1, 2, 3, 4] do
-          for stmt <- Migrations.down_statements(prefix, target) do
+        for target <- 0..6 do
+          # The one table this chain creates itself (V7) is dropped on the way
+          # down; that exact statement is pinned above, so it is the only one
+          # let through here.
+          for stmt <- Migrations.down_statements(prefix, target),
+              stmt != "DROP TABLE IF EXISTS #{prefix}.phoenix_kit_billing_number_sequences" do
             refute stmt =~ forbidden,
                    "down_statements(#{inspect(prefix)}, #{target}) contains: #{stmt}"
           end
@@ -844,7 +888,12 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
       assert Enum.any?(stmts, &(&1 =~ "DROP COLUMN IF EXISTS rounding_rule"))
       assert Enum.any?(stmts, &(&1 =~ "DROP COLUMN IF EXISTS rate_updated_at"))
-      refute Enum.any?(stmts, &(&1 =~ ~r/DROP TABLE/i))
+
+      refute Enum.any?(
+               stmts,
+               &(&1 =~ ~r/DROP TABLE(?! IF EXISTS public\.phoenix_kit_billing_number_sequences$)/i)
+             )
+
       assert List.last(stmts) =~ "pkb_schema:1"
     end
   end
@@ -898,7 +947,11 @@ defmodule PhoenixKitBilling.MigrationsTest do
                &(&1 == "ALTER TABLE public.phoenix_kit_orders DROP COLUMN IF EXISTS base_total")
              )
 
-      refute Enum.any?(stmts, &(&1 =~ ~r/DROP TABLE/i))
+      refute Enum.any?(
+               stmts,
+               &(&1 =~ ~r/DROP TABLE(?! IF EXISTS public\.phoenix_kit_billing_number_sequences$)/i)
+             )
+
       assert List.last(stmts) =~ "pkb_schema:2"
     end
 

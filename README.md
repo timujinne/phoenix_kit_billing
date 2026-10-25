@@ -305,6 +305,7 @@ lib/
     │   ├── billing_profile.ex        # User billing information
     │   ├── currency.ex               # Currency definitions
     │   ├── invoice.ex                # Invoice with receipt
+    │   ├── number_sequence.ex        # Counter behind order/invoice/receipt/transaction numbers
     │   ├── order.ex                  # Order with line items
     │   ├── payment_method.ex         # Saved payment methods
     │   ├── subscription.ex           # Subscription records
@@ -331,6 +332,7 @@ lib/
 | `phoenix_kit_payment_methods` | Saved payment methods from providers |
 | `phoenix_kit_payment_options` | Available payment options |
 | `phoenix_kit_webhook_events` | Provider webhook event log |
+| `phoenix_kit_billing_number_sequences` | Counter behind order, invoice, receipt and transaction numbers |
 
 ## Development
 

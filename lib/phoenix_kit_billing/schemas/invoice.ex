@@ -153,7 +153,7 @@ defmodule PhoenixKitBilling.Invoice do
     |> validate_number(:total, greater_than_or_equal_to: 0)
     |> validate_number(:paid_amount, greater_than_or_equal_to: 0)
     |> validate_line_items()
-    |> unique_constraint(:invoice_number)
+    |> unique_constraint(:invoice_number, name: :phoenix_kit_invoices_invoice_number_uidx)
     # The constraints are named by core's migration chain, not by Ecto's
     # `<table>_<field>_fkey` default, so they must be named explicitly or
     # Postgres' error never matches and a bad reference raises

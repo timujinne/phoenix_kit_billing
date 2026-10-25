@@ -240,7 +240,7 @@ defmodule PhoenixKitBilling.Order do
     |> validate_line_items()
     |> maybe_generate_order_number()
     |> track_revision()
-    |> unique_constraint(:order_number)
+    |> unique_constraint(:order_number, name: :phoenix_kit_orders_order_number_uidx)
     # Named explicitly — see the note in `Invoice.changeset/2`.
     |> foreign_key_constraint(:user_uuid, name: :fk_orders_user_uuid)
     |> foreign_key_constraint(:billing_profile_uuid,

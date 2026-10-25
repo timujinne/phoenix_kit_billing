@@ -198,7 +198,7 @@ lib/phoenix_kit_billing/
 ├── mix_tasks/                           # phoenix_kit_billing.install
 ├── plugs/cache_body_reader.ex           # Raw-body cache for webhook signatures
 ├── providers/                           # Provider behaviour (10 callbacks, `detach_payment_method/1` optional), registry, 4 impls, types
-├── schemas/                             # 10 Ecto schemas
+├── schemas/                             # 11 Ecto schemas
 ├── utils/                               # IBAN data, webhook_processor.ex
 ├── workers/                             # Oban: subscription renewal, dunning
 └── web/
@@ -226,6 +226,7 @@ lib/phoenix_kit_billing/
 | `PaymentOption` | `phoenix_kit_payment_options` | Checkout options |
 | `Currency` | `phoenix_kit_currencies` | Rates, `is_default`, `rounding_rule`, `rate_updated_at` |
 | `WebhookEvent` | `phoenix_kit_webhook_events` | Provider event log |
+| `NumberSequence` | `phoenix_kit_billing_number_sequences` | Counter behind order, invoice, receipt and transaction numbers, one row per (scope, year); created by V7 |
 
 Invoice status workflow: `draft → sent → paid`, with `sent → overdue → paid` and
 `→ void` as the exits.
@@ -365,7 +366,7 @@ in `README.md`.
 
 Owns a versioned chain: `PhoenixKitBilling.Migrations` via `migration_module/0`,
 marker `pkb_schema:<N>` as a `COMMENT ON TABLE
-phoenix_kit_payment_provider_configs`, currently **V6**. A marker-less table reads
+phoenix_kit_payment_provider_configs`, currently **V7**. A marker-less table reads
 as version 0 (the core-baseline shape). `mix phoenix_kit.update` applies the chain
 in hosts; the test suite applies it by executing
 `Migrations.up_statements/2` as data (see Testing).
@@ -409,6 +410,16 @@ in hosts; the test suite applies it by executing
   `migrations_adoption_test.exs`). A shape change is a new version here, never a
   core migration. The email templates core seeds for billing are not carried:
   `EmailDefaults` is billing's own fallback.
+- **V7 adds the number counter**: `phoenix_kit_billing_number_sequences`, the
+  one table this chain creates itself (core never had it). Order, invoice,
+  receipt and transaction numbers come from it, taken in the transaction that inserts the row
+  using the number (`next_number/2` in `PhoenixKitBilling`); the old
+  `count(rows of the year) + 1` handed out a taken number once a row was
+  deleted. A generated number that a row already has is skipped (a savepoint,
+  after lifting the counter to the highest number there; up to 20 tries). `down/1` below V7 drops the table. A create holds its counter row
+  until its transaction ends; the lock order and the rules for calling a create
+  inside your own transaction are in the V7 section of the `Migrations`
+  moduledoc and the `@doc`s.
 - **V5 lets a payer be a billing email instead of an account**:
   `phoenix_kit_invoices.user_uuid` and `phoenix_kit_transactions.user_uuid`
   drop `NOT NULL`, and `phoenix_kit_invoices_payer_check` requires a user or a
@@ -416,9 +427,10 @@ in hosts; the test suite applies it by executing
   rows exist rather than deleting or re-attributing money records.
 - **One chain version per release, not one per column.** Related changes ride in
   the same version.
-- **`down/1` never drops a table.** It unstamps the marker and reverses the
+- **`down/1` never drops a core-created table.** It unstamps the marker and reverses the
   objects a version added (V3's columns, V2's index and columns). The tables are
-  core-created; only core's own baseline rollback may drop them.
+  core-created; only core's own baseline rollback may drop them (V7's counter table,
+  which this chain created, is the one `down/1` drops).
 - A version that changes the shape of a core-created table can put core's
   `ExpectedSchema` manifest out of date — coordinate before adding one, do not
   assume silence means agreement. Core's own chain no longer touches module
@@ -427,8 +439,9 @@ in hosts; the test suite applies it by executing
   reaches interpolated DDL, and an invalid prefix must surface as the
   `ArgumentError`, never be swallowed into version 0.
 
-All schemas use UUIDv7 primary keys and `use PhoenixKit.SchemaPrefix`; migrations
-generate uuids with `uuid_generate_v7()`, never `gen_random_uuid()`.
+All schemas `use PhoenixKit.SchemaPrefix` and use UUIDv7 primary keys, except
+`NumberSequence`, which is keyed by (scope, year); migrations generate uuids with
+`uuid_generate_v7()`, never `gen_random_uuid()`.
 
 ## Testing
 

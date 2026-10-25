@@ -79,7 +79,9 @@ defmodule PhoenixKitBilling.Transaction do
     |> validate_inclusion(:payment_method, @payment_methods)
     |> validate_number(:amount, not_equal_to: 0)
     |> validate_length(:currency, is: 3)
-    |> unique_constraint(:transaction_number)
+    |> unique_constraint(:transaction_number,
+      name: :phoenix_kit_transactions_transaction_number_uidx
+    )
     |> foreign_key_constraint(:invoice_uuid)
     |> foreign_key_constraint(:user_uuid)
   end
