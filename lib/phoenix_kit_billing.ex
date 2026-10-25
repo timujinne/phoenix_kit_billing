@@ -2591,10 +2591,31 @@ defmodule PhoenixKitBilling do
   end
 
   @doc """
-  Deletes an order (only drafts).
+  Deletes an order (only drafts that have no invoice).
+
+  The foreign key from an invoice to its order is `ON DELETE SET NULL`, so
+  deleting the order would silently detach any invoice - even a void one -
+  and lose what ties it to the order. An order with an invoice is refused.
+
+  Returns `{:ok, order}`, `{:error, :can_only_delete_drafts}`,
+  `{:error, :order_has_invoices}` or `{:error, changeset}`.
   """
-  def delete_order(%Order{status: "draft"} = order) do
-    repo().delete(order)
+  def delete_order(%Order{status: "draft", uuid: uuid} = order) do
+    repo().transaction(fn ->
+      # FOR UPDATE conflicts with the FOR KEY SHARE an invoice insert takes on
+      # the order, so an invoice created while this runs either is seen below
+      # or waits and then fails its foreign key - it is never detached.
+      Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().all()
+
+      if repo().exists?(from(i in Invoice, where: i.order_uuid == ^uuid)) do
+        repo().rollback(:order_has_invoices)
+      else
+        case repo().delete(order) do
+          {:ok, deleted} -> deleted
+          {:error, changeset} -> repo().rollback(changeset)
+        end
+      end
+    end)
   end
 
   def delete_order(_order), do: {:error, :can_only_delete_drafts}
