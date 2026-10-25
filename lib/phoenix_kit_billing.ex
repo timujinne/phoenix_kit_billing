@@ -2483,29 +2483,38 @@ defmodule PhoenixKitBilling do
   @doc """
   Cancels an order.
 
+  A `reason` is appended to `internal_notes` as a line
+  `"Cancelled <YYYY-MM-DD HH:MM UTC>: <reason>"`, after a blank line when there
+  are notes already. `metadata["cancelled_from"]` always records the status the
+  order had before the cancel, so an integration can tell an order cancelled
+  straight from `"draft"` (never sent anywhere) from one cancelled after
+  confirmation.
+
+  ## Options
+
+  - `:actor_uuid` - the user who cancels the order, kept in
+    `metadata["cancelled_by_uuid"]`
+
   Takes a row lock on the order for the duration of the call and checks the
   transition against the order's stored status, not the struct's, so call it
   inside your own transaction only if holding that lock until commit is fine.
+  The notes and metadata it appends to are the stored ones too.
 
   Returns `{:ok, order}`, `{:error, :order_not_cancellable}` when the stored
   status is not `"draft"`, `"pending"` or `"confirmed"`, or `{:error, changeset}`.
   """
-  def cancel_order(%Order{} = order, reason \\ nil) do
+  def cancel_order(%Order{} = order, reason \\ nil, opts \\ []) do
     result =
       transition_order(order, fn current ->
         if Order.cancellable?(current) do
-          changeset =
-            current
-            |> Order.status_changeset("cancelled")
-
-          changeset =
-            if reason do
-              Ecto.Changeset.put_change(changeset, :internal_notes, reason)
-            else
-              changeset
-            end
-
-          repo().update(changeset)
+          current
+          |> Order.status_changeset("cancelled")
+          |> put_cancel_note(current.internal_notes, normalize_reason(reason))
+          |> Ecto.Changeset.put_change(
+            :metadata,
+            cancel_metadata(current.metadata, current.status, opts[:actor_uuid])
+          )
+          |> repo().update()
         else
           {:error, :order_not_cancellable}
         end
@@ -2521,6 +2530,28 @@ defmodule PhoenixKitBilling do
     end
   end
 
+  defp put_cancel_note(changeset, _notes, nil), do: changeset
+
+  defp put_cancel_note(changeset, notes, reason) do
+    line = "Cancelled #{Calendar.strftime(UtilsDate.utc_now(), "%Y-%m-%d %H:%M UTC")}: #{reason}"
+
+    note =
+      case notes do
+        blank when blank in [nil, ""] -> line
+        existing -> existing <> "\n\n" <> line
+      end
+
+    Ecto.Changeset.put_change(changeset, :internal_notes, note)
+  end
+
+  defp cancel_metadata(metadata, from_status, actor_uuid) do
+    (metadata || %{})
+    |> Map.put("cancelled_from", from_status)
+    |> then(fn metadata ->
+      if actor_uuid, do: Map.put(metadata, "cancelled_by_uuid", actor_uuid), else: metadata
+    end)
+  end
+
   # Runs a status transition against the order's CURRENT status. The guards
   # (`Order.payable?/1`, `Order.cancellable?/1`) and `Order.status_changeset/2`
   # read `status` off the struct they are handed, and the UPDATE filters on
@@ -2529,30 +2560,34 @@ defmodule PhoenixKitBilling do
   # cancellation both succeeding, the order ending `cancelled` with `paid_at`
   # set). The row is locked and its status re-read inside the transaction, and
   # `fun` gets the caller's struct with that status, so check and write are
-  # one step. Same pattern as `lock_invoice_for_update/1`.
+  # one step. Same pattern as `lock_invoice_for_update/1`. The `internal_notes`
+  # and `metadata` it hands over are the stored ones as well: a transition that
+  # appends to them (`cancel_order/3`) must not append to what the caller read
+  # minutes ago and so drop what was written since.
   #
   # Refusals are RETURNED, not rolled back: this runs inside the invoice-paid
   # transaction too (`maybe_mark_linked_order_paid/1`), where a rollback would
   # abort the whole settlement.
   defp transition_order(%Order{} = order, fun) when is_function(fun, 1) do
-    case repo().transaction(fn -> fun.(%{order | status: lock_order_status(order)}) end) do
+    case repo().transaction(fn -> fun.(Map.merge(order, lock_order_row(order))) end) do
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # SELECT status ... FOR NO KEY UPDATE. That lock queues transitions behind
-  # each other (it conflicts with itself and with the UPDATE that follows) but
-  # not with the FOR KEY SHARE an invoice insert takes on the order through
-  # its foreign key. A row that has vanished keeps the caller's status, so the
-  # UPDATE that follows fails the way it always did.
-  defp lock_order_status(%Order{uuid: uuid, status: status}) do
+  # SELECT status, internal_notes, metadata ... FOR NO KEY UPDATE. That lock
+  # queues transitions behind each other (it conflicts with itself and with
+  # the UPDATE that follows) but not with the FOR KEY SHARE an invoice insert
+  # takes on the order through its foreign key. A row that has vanished keeps
+  # the caller's values, so the UPDATE that follows fails the way it always
+  # did.
+  defp lock_order_row(%Order{uuid: uuid}) do
     Order
     |> where([o], o.uuid == ^uuid)
     |> lock("FOR NO KEY UPDATE")
-    |> select([o], o.status)
+    |> select([o], map(o, [:status, :internal_notes, :metadata]))
     |> repo().one()
-    |> Kernel.||(status)
+    |> Kernel.||(%{})
   end
 
   @doc """
@@ -2639,7 +2674,7 @@ defmodule PhoenixKitBilling do
   end
 
   defp write_order_sync(uuid, params) do
-    # NO KEY UPDATE, like `lock_order_status/1`: it queues behind every other
+    # NO KEY UPDATE, like `lock_order_row/1`: it queues behind every other
     # writer of the row but not behind the FOR KEY SHARE an invoice insert
     # takes on it through its foreign key.
     order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR NO KEY UPDATE") |> repo().one()
