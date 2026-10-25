@@ -146,6 +146,8 @@ defmodule PhoenixKitBilling.Invoice do
       :paid_at,
       :voided_at
     ])
+    |> keep_void_trail()
+    |> keep_status()
     |> validate_required([:total, :currency])
     |> validate_payer()
     |> validate_inclusion(:status, @valid_statuses)
@@ -165,6 +167,33 @@ defmodule PhoenixKitBilling.Invoice do
       message: "an invoice needs a user or a billing email"
     )
   end
+
+  # `metadata["void"]` is billing's own (written by `PhoenixKitBilling.void_invoice/3`
+  # and `record_payment_after_void/2`): an input can neither forge it nor wipe
+  # it. A new invoice has none; a stored one keeps what it has.
+  defp keep_void_trail(changeset) do
+    case fetch_change(changeset, :metadata) do
+      {:ok, %{} = metadata} ->
+        kept = Map.take(changeset.data.metadata || %{}, ["void"])
+        put_change(changeset, :metadata, metadata |> Map.drop(["void"]) |> Map.merge(kept))
+
+      _ ->
+        changeset
+    end
+  end
+
+  # A stored invoice's status moves only through send, void and pay, which
+  # check it on the locked row. An edit that carried a status along could undo
+  # a void.
+  defp keep_status(%Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset) do
+    if get_change(changeset, :status) do
+      add_error(changeset, :status, "can only change by sending, voiding or paying the invoice")
+    else
+      changeset
+    end
+  end
+
+  defp keep_status(changeset), do: changeset
 
   # A payer is EITHER a registered user OR someone reachable by email —
   # a guest paying for a booking has no account, and inventing one for

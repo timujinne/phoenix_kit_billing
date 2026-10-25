@@ -3129,15 +3129,39 @@ defmodule PhoenixKitBilling do
   end
 
   @doc """
-  Updates an invoice.
+  Updates a draft invoice.
+
+  Takes a row lock on the invoice and checks that it is still a draft on the
+  stored row, not the struct's. The status is not editable here (see
+  `Invoice.changeset/2`).
+
+  Returns `{:ok, invoice}`, `{:error, :invoice_not_editable}`,
+  `{:error, :invoice_not_found}` or `{:error, changeset}`. Refusals are
+  returned, not rolled back, so a transaction of the caller's stays usable.
   """
   def update_invoice(%Invoice{} = invoice, attrs) do
-    if Invoice.editable?(invoice) do
-      invoice
-      |> Invoice.changeset(attrs)
-      |> repo().update()
-    else
-      {:error, :invoice_not_editable}
+    unwrap_transaction(fn ->
+      case fetch_locked_invoice(invoice) do
+        nil ->
+          {:error, :invoice_not_found}
+
+        locked ->
+          if Invoice.editable?(locked) do
+            locked |> Invoice.changeset(attrs) |> repo().update()
+          else
+            {:error, :invoice_not_editable}
+          end
+      end
+    end)
+  end
+
+  # Runs `fun` in a transaction and returns what it returned. For functions
+  # that report a refusal as a value: nothing has been written when they do,
+  # and a rollback would doom a transaction the caller may be holding.
+  defp unwrap_transaction(fun) do
+    case repo().transaction(fun) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
     end
   end
 
