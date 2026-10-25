@@ -4728,51 +4728,51 @@ msgstr "Текст в подвале слишком длинный: не бол�
 #: lib/phoenix_kit_billing/web/invoice_detail.html.heex:861
 #, elixir-autogen, elixir-format
 msgid "Void Invoice"
-msgstr "Void Invoice"
+msgstr "Аннулировать счёт"
 
 #: lib/phoenix_kit_billing/web/invoice_detail.html.heex:863
 #, elixir-autogen, elixir-format
 msgid "Void invoice %{number}? This cannot be undone."
-msgstr "Void invoice %{number}? This cannot be undone."
+msgstr "Аннулировать счёт %{number}? Это действие нельзя отменить."
 
 #: lib/phoenix_kit_billing/web/invoice_detail.html.heex:869
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:368
 #, elixir-autogen, elixir-format
 msgid "Reason (optional)"
-msgstr "Reason (optional)"
+msgstr "Причина (необязательно)"
 
 #: lib/phoenix_kit_billing/web/invoice_detail.html.heex:875
 #, elixir-autogen, elixir-format
 msgid "Why is this invoice being voided?"
-msgstr "Why is this invoice being voided?"
+msgstr "Почему счёт аннулируется?"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:360
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:383
 #, elixir-autogen, elixir-format
 msgid "Cancel Order"
-msgstr "Cancel Order"
+msgstr "Отменить заказ"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:362
 #, elixir-autogen, elixir-format
 msgid "Cancel order %{number}?"
-msgstr "Cancel order %{number}?"
+msgstr "Отменить заказ %{number}?"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:374
 #, elixir-autogen, elixir-format
 msgid "Why is this order being cancelled?"
-msgstr "Why is this order being cancelled?"
+msgstr "Почему заказ отменяется?"
 
 #: lib/phoenix_kit_billing/web/invoice_print.html.heex:452
 #, elixir-autogen, elixir-format
 msgid "VOID"
-msgstr "VOID"
+msgstr "АННУЛИРОВАН"
 
 #: lib/phoenix_kit_billing/web/invoice_print.html.heex:454
 #, elixir-autogen, elixir-format
 msgid "Voided on %{date}"
-msgstr "Voided on %{date}"
+msgstr "Аннулирован: %{date}"
 
 #: lib/phoenix_kit_billing/errors.ex:168
 #, elixir-autogen, elixir-format
 msgid "This order has invoices and cannot be deleted."
-msgstr "This order has invoices and cannot be deleted."
+msgstr "У заказа есть счета, его нельзя удалить."
