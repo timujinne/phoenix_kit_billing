@@ -4638,3 +4638,8 @@ msgstr "У замовлення є рахунки, його не можна ви
 #, elixir-autogen, elixir-format
 msgid "Payment received after void - refund it at the payment provider"
 msgstr "Платіж отримано після анулювання — поверніть його через платіжного провайдера"
+
+#: lib/phoenix_kit_billing/errors.ex:141
+#, elixir-autogen, elixir-format
+msgid "This invoice has not been voided."
+msgstr "Цей рахунок не анульовано."

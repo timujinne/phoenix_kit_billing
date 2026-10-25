@@ -54,6 +54,7 @@ defmodule PhoenixKitBilling.Errors do
           | :invoice_not_paid
           | :invoice_not_payable
           | :invoice_not_sendable
+          | :invoice_not_void
           | :invoice_not_voidable
           | :is_default
           | :max_retries_exceeded
@@ -138,6 +139,8 @@ defmodule PhoenixKitBilling.Errors do
 
   def message(:invoice_not_sendable),
     do: gettext("This invoice cannot be sent in its current state.")
+
+  def message(:invoice_not_void), do: gettext("This invoice has not been voided.")
 
   def message(:invoice_not_voidable),
     do: gettext("This invoice cannot be voided in its current state.")
