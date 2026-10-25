@@ -17,6 +17,7 @@ defmodule PhoenixKitBilling.Web.Orders do
   import PhoenixKitWeb.Components.Core.TimeDisplay
   import PhoenixKitBilling.Web.Components.CurrencyDisplay
   import PhoenixKitBilling.Web.Components.OrderStatusBadge
+  import PhoenixKitBilling.Web.Components.TrashMark, only: [trashed_by_emails: 1]
 
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
@@ -39,6 +40,7 @@ defmodule PhoenixKitBilling.Web.Orders do
         |> Trail.billing(gettext("Orders"))
         |> assign(:project_title, project_title)
         |> assign(:orders, [])
+        |> assign(:trashers, %{})
         |> assign(:total_count, 0)
         |> assign(:loading, true)
         |> assign_filter_defaults()
@@ -67,6 +69,7 @@ defmodule PhoenixKitBilling.Web.Orders do
     socket
     |> assign(:search, "")
     |> assign(:status_filter, "all")
+    |> assign(:trash_view, false)
     |> assign(:date_from, nil)
     |> assign(:date_to, nil)
   end
@@ -89,6 +92,7 @@ defmodule PhoenixKitBilling.Web.Orders do
     |> assign(:per_page, per_page)
     |> assign(:search, search)
     |> assign(:status_filter, status)
+    |> assign(:trash_view, params["trash"] == "1")
   end
 
   defp parse_page(nil), do: 1
@@ -107,7 +111,8 @@ defmodule PhoenixKitBilling.Web.Orders do
       page: page,
       per_page: per_page,
       search: search,
-      status_filter: status
+      status_filter: status,
+      trash_view: trash_view
     } = socket.assigns
 
     opts = [
@@ -115,6 +120,7 @@ defmodule PhoenixKitBilling.Web.Orders do
       per_page: per_page,
       search: search,
       status: if(status == "all", do: nil, else: status),
+      trashed: if(trash_view, do: :only, else: :exclude),
       preload: [:user]
     ]
 
@@ -123,6 +129,7 @@ defmodule PhoenixKitBilling.Web.Orders do
 
     socket
     |> assign(:orders, orders)
+    |> assign(:trashers, if(trash_view, do: trashed_by_emails(orders), else: %{}))
     |> assign(:total_count, total_count)
     |> assign(:total_pages, max(1, total_pages))
     |> assign(:loading, false)
@@ -145,7 +152,17 @@ defmodule PhoenixKitBilling.Web.Orders do
 
   @impl true
   def handle_event("clear_filters", _params, socket) do
-    {:noreply, push_patch(socket, to: Routes.path("/admin/billing/orders"))}
+    query = if socket.assigns.trash_view, do: "?trash=1", else: ""
+    {:noreply, push_patch(socket, to: Routes.path("/admin/billing/orders#{query}"))}
+  end
+
+  # The tabs above the table: the orders, or the trash.
+  @impl true
+  def handle_event("show_trash", %{"trash" => trash}, socket) do
+    query = build_url_params(socket.assigns, %{"page" => 1, "trash" => trash})
+
+    {:noreply,
+     push_patch(socket, to: Routes.path("/admin/billing/orders" <> query_suffix(query)))}
   end
 
   @impl true
@@ -173,7 +190,9 @@ defmodule PhoenixKitBilling.Web.Orders do
              :order_confirmed,
              :order_paid,
              :order_refunded,
-             :order_cancelled
+             :order_cancelled,
+             :order_trashed,
+             :order_restored
            ] do
     {:noreply, load_orders(socket)}
   end
@@ -184,12 +203,16 @@ defmodule PhoenixKitBilling.Web.Orders do
     {:noreply, socket}
   end
 
+  defp query_suffix(""), do: ""
+  defp query_suffix(query), do: "?" <> query
+
   defp build_url_params(assigns, new_params) do
     params = %{
       "page" => Map.get(new_params, "page", assigns.page),
       "per_page" => assigns.per_page,
       "search" => Map.get(new_params, "search", assigns.search),
-      "status" => Map.get(new_params, "status", assigns.status_filter)
+      "status" => Map.get(new_params, "status", assigns.status_filter),
+      "trash" => Map.get(new_params, "trash", if(assigns.trash_view, do: "1"))
     }
 
     params

@@ -105,6 +105,49 @@ defmodule PhoenixKitBilling.Web.UserOrdersTest do
     end
   end
 
+  describe "the trash" do
+    test "an order in the trash is not on the customer's page", %{conn: conn, user: user} do
+      {:ok, kept} =
+        Billing.create_order(user.uuid, %{
+          "total" => Decimal.new("10.00"),
+          "currency" => "EUR",
+          "billing_snapshot" => %{"email" => user.email}
+        })
+
+      {:ok, gone} =
+        Billing.create_order(user.uuid, %{
+          "total" => Decimal.new("20.00"),
+          "currency" => "EUR",
+          "billing_snapshot" => %{"email" => user.email}
+        })
+
+      {:ok, _} = Billing.trash_order(gone)
+
+      {:ok, _view, html} = live(conn, "/en/dashboard/billing-orders")
+
+      assert html =~ kept.order_number
+      refute html =~ gone.order_number
+    end
+
+    test "an invoice in the trash is not shown on its order", %{conn: conn, user: user} do
+      {:ok, order} =
+        Billing.create_order(user.uuid, %{
+          "total" => Decimal.new("10.00"),
+          "currency" => "EUR",
+          "billing_snapshot" => %{"email" => user.email}
+        })
+
+      {:ok, shown} = Billing.create_invoice_from_order(order)
+      {:ok, hidden} = Billing.create_invoice_from_order(order)
+      {:ok, _} = Billing.trash_invoice(hidden)
+
+      {:ok, _view, html} = live(conn, "/en/dashboard/billing-orders")
+
+      assert html =~ shown.invoice_number
+      refute html =~ hidden.invoice_number
+    end
+  end
+
   describe "localized_date/1" do
     # The test router only mirrors "/en/..." (see its own moduledoc), so
     # this goes straight at the formatting logic via Gettext.put_locale/2

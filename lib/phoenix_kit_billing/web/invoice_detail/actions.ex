@@ -7,7 +7,10 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   Each function takes a socket and returns `{:noreply, socket}`.
   """
 
+  use Gettext, backend: PhoenixKitBilling.Gettext
+
   import Phoenix.LiveView, only: [put_flash: 3, redirect: 2]
+  import PhoenixKitBilling.Web.Components.TrashMark, only: [trashed_by_email: 1]
 
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
@@ -396,6 +399,68 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     end
   end
 
+  def trash_invoice(socket) do
+    actor_uuid = actor_uuid(socket)
+
+    case Billing.trash_invoice(socket.assigns.invoice, actor_uuid: actor_uuid) do
+      {:ok, invoice} ->
+        Activity.log("billing.invoice_trashed",
+          actor_uuid: actor_uuid,
+          actor_role: actor_role(socket),
+          resource_type: "invoice",
+          resource_uuid: invoice.uuid,
+          metadata: %{"invoice_number" => invoice.invoice_number, "status" => invoice.status}
+        )
+
+        {:noreply,
+         socket
+         |> reload_invoice()
+         |> Phoenix.Component.assign(:show_trash_modal, false)
+         |> put_flash(:info, gettext("Invoice moved to the trash"))}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> reload_invoice()
+         |> Phoenix.Component.assign(:show_trash_modal, false)
+         |> put_flash(
+           :error,
+           gettext("Failed to move the invoice to the trash: %{reason}",
+             reason: Errors.message(reason)
+           )
+         )}
+    end
+  end
+
+  def restore_invoice(socket) do
+    case Billing.restore_invoice(socket.assigns.invoice) do
+      {:ok, invoice} ->
+        Activity.log("billing.invoice_restored",
+          actor_uuid: actor_uuid(socket),
+          actor_role: actor_role(socket),
+          resource_type: "invoice",
+          resource_uuid: invoice.uuid,
+          metadata: %{"invoice_number" => invoice.invoice_number, "status" => invoice.status}
+        )
+
+        {:noreply,
+         socket
+         |> reload_invoice()
+         |> Phoenix.Component.assign(:show_restore_modal, false)
+         |> put_flash(:info, gettext("Invoice restored from the trash"))}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> reload_invoice()
+         |> Phoenix.Component.assign(:show_restore_modal, false)
+         |> put_flash(
+           :error,
+           gettext("Failed to restore the invoice: %{reason}", reason: Errors.message(reason))
+         )}
+    end
+  end
+
   # Private helpers
 
   defp put_reason(metadata, nil), do: metadata
@@ -412,6 +477,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     socket
     |> Phoenix.Component.assign(:invoice, updated_invoice)
     |> Phoenix.Component.assign(:transactions, transactions)
+    |> Phoenix.Component.assign(:trashed_by, trashed_by_email(updated_invoice))
   end
 
   defp update_transaction_in_list(transactions, updated_transaction) do

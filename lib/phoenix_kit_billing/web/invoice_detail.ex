@@ -21,6 +21,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   import PhoenixKitBilling.Web.Components.InvoiceStatusBadge
   import PhoenixKitBilling.Web.Components.TransactionTypeBadge
   import PhoenixKitBilling.Web.Components.OrderStatusBadge
+  import PhoenixKitBilling.Web.Components.TrashMark
 
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
@@ -65,16 +66,13 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
 
         socket =
           if socket.assigns[:loaded?] do
-            socket
-            |> assign(:invoice, invoice)
-            |> assign(:transactions, invoice.transactions)
+            assign_invoice(socket, invoice)
           else
             socket
             |> assign(:loaded?, true)
             |> Trail.billing(invoice.invoice_number, [Trail.invoices()])
             |> assign(:project_title, project_title)
-            |> assign(:invoice, invoice)
-            |> assign(:transactions, invoice.transactions)
+            |> assign_invoice(invoice)
             |> assign(:available_providers, available_providers)
             |> assign(:checkout_loading, nil)
             |> assign(:show_payment_modal, false)
@@ -84,6 +82,8 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
             |> assign(:show_send_receipt_modal, false)
             |> assign(:show_send_credit_note_modal, false)
             |> assign(:show_send_payment_confirmation_modal, false)
+            |> assign(:show_trash_modal, false)
+            |> assign(:show_restore_modal, false)
             |> assign(:payment_amount, Invoice.remaining_amount(invoice) |> Decimal.to_string())
             |> assign(:refund_amount, "")
             |> assign(:payment_description, "")
@@ -106,7 +106,13 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   # PubSub: refresh invoice + transactions when a related event fires.
   @impl true
   def handle_info({event, %{uuid: uuid}}, %{assigns: %{invoice: %{uuid: uuid}}} = socket)
-      when event in [:invoice_paid, :invoice_voided, :invoice_sent] do
+      when event in [
+             :invoice_paid,
+             :invoice_voided,
+             :invoice_sent,
+             :invoice_trashed,
+             :invoice_restored
+           ] do
     {:noreply, refresh_invoice(socket)}
   end
 
@@ -133,11 +139,21 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   defp refresh_invoice(%{assigns: %{invoice: %{uuid: uuid}}} = socket) do
     case Billing.get_invoice(uuid, preload: [:order, :transactions, :user]) do
       nil -> socket
-      invoice -> assign(socket, invoice: invoice, transactions: invoice.transactions)
+      invoice -> assign_invoice(socket, invoice)
     end
   end
 
   defp refresh_invoice(socket), do: socket
+
+  # The invoice and what the page derives from it: its transactions, who trashed
+  # it, and whether the viewer may change it.
+  defp assign_invoice(socket, invoice) do
+    socket
+    |> assign(:invoice, invoice)
+    |> assign(:transactions, invoice.transactions)
+    |> assign(:trashed_by, trashed_by_email(invoice))
+    |> assign(:can_manage_invoices, Authz.can?(socket, :manage_invoices))
+  end
 
   # Modal Controls
 
@@ -179,6 +195,26 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   @impl true
   def handle_event("close_void_modal", _params, socket) do
     {:noreply, assign(socket, :show_void_modal, false)}
+  end
+
+  @impl true
+  def handle_event("open_trash_modal", _params, socket) do
+    {:noreply, assign(socket, :show_trash_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_trash_modal", _params, socket) do
+    {:noreply, assign(socket, :show_trash_modal, false)}
+  end
+
+  @impl true
+  def handle_event("open_restore_modal", _params, socket) do
+    {:noreply, assign(socket, :show_restore_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_restore_modal", _params, socket) do
+    {:noreply, assign(socket, :show_restore_modal, false)}
   end
 
   @impl true
@@ -373,6 +409,20 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
     end)
   end
 
+  @impl true
+  def handle_event("trash_invoice", params, socket) do
+    Authz.authorize(socket, :manage_invoices, fn ->
+      gated_event("trash_invoice", params, socket)
+    end)
+  end
+
+  @impl true
+  def handle_event("restore_invoice", params, socket) do
+    Authz.authorize(socket, :manage_invoices, fn ->
+      gated_event("restore_invoice", params, socket)
+    end)
+  end
+
   defp gated_event("record_payment", _params, socket), do: Actions.record_payment(socket)
 
   defp gated_event("pay_with_provider", %{"provider" => provider}, socket),
@@ -393,4 +443,8 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
     do: Actions.void_invoice(socket, params["reason"])
 
   defp gated_event("generate_receipt", _params, socket), do: Actions.generate_receipt(socket)
+
+  defp gated_event("trash_invoice", _params, socket), do: Actions.trash_invoice(socket)
+
+  defp gated_event("restore_invoice", _params, socket), do: Actions.restore_invoice(socket)
 end

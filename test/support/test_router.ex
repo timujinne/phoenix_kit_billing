@@ -88,6 +88,19 @@ defmodule PhoenixKitBilling.Test.Router do
     end
   end
 
+  # The lists patch to `Routes.path/1`, which has no locale segment for the
+  # primary language, so the pages they patch between answer there too.
+  scope "/admin/billing", PhoenixKitBilling.Web do
+    pipe_through(:browser)
+
+    live_session :billing_test_unprefixed,
+      layout: {PhoenixKitBilling.Test.Layouts, :app},
+      on_mount: {PhoenixKitBilling.Test.Hooks, :assign_scope} do
+      live("/orders", Orders, :index, as: :billing_orders_unprefixed)
+      live("/invoices", Invoices, :index, as: :billing_invoices_unprefixed)
+    end
+  end
+
   # Customer dashboard tabs live under `/dashboard` in production.
   scope "/en/dashboard", PhoenixKitBilling.Web do
     pipe_through(:browser)

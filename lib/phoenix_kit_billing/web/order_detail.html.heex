@@ -6,11 +6,22 @@
           {@order.order_number}
         </h1>
         <.order_status_badge status={@order.status} size={:md} />
+        <.trash_badge :if={Order.trashed?(@order)} id="order-trashed-badge" size={:md} />
       </div>
       <p class="text-sm text-base-content/60 mt-0.5">
         {gettext("Created")} <.time_ago datetime={@order.inserted_at} />
       </p>
       <:actions>
+        <%= if Order.trashed?(@order) do %>
+          <button
+            :if={@can_manage_orders}
+            id="restore-order-button"
+            phx-click="open_restore_modal"
+            class="btn btn-warning btn-sm"
+          >
+            <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
+          </button>
+        <% else %>
         <%= case @order.status do %>
           <% "draft" -> %>
             <button phx-click="confirm_order" class="btn btn-info btn-sm">
@@ -50,8 +61,27 @@
             <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Cancel")}
           </button>
         <% end %>
+        <%= if @can_manage_orders and Order.trashable?(@order) and
+                 not Enum.any?(@invoices, &PhoenixKitBilling.Invoice.open?/1) do %>
+          <button
+            id="trash-order-button"
+            phx-click="open_trash_modal"
+            class="btn btn-outline btn-sm"
+          >
+            <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
+          </button>
+        <% end %>
+        <% end %>
       </:actions>
     </.admin_page_header>
+
+    <%!-- An order in the trash says so, since when and by whom. --%>
+    <.trash_notice
+      :if={Order.trashed?(@order)}
+      id="order-trashed-mark"
+      trashed_at={@order.trashed_at}
+      by={@trashed_by}
+    />
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <%!-- Main Content --%>
@@ -169,7 +199,7 @@
           <div class="card-body">
             <div class="flex justify-between items-center">
               <h2 class="card-title">{gettext("Invoices")}</h2>
-              <%= if @order.status in ["draft", "pending", "confirmed"] do %>
+              <%= if @order.status in ["draft", "pending", "confirmed"] and not Order.trashed?(@order) do %>
                 <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
                   <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Generate Invoice")}
                 </button>
@@ -387,6 +417,59 @@
         </form>
       </div>
       <div class="modal-backdrop" phx-click="close_cancel_modal"></div>
+    </div>
+  <% end %>
+
+  <%!-- Move to Trash Modal --%>
+  <%= if @show_trash_modal do %>
+    <div id="trash-order-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Move to trash")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Move order %{number} to the trash?", number: @order.order_number)}
+        </p>
+        <p class="text-sm text-base-content/60">
+          {gettext(
+            "Nothing is deleted. The order keeps its status and number and stays in the trash until you restore it."
+          )}
+        </p>
+
+        <form id="trash-order-form" phx-submit="trash_order">
+          <div class="modal-action">
+            <button type="button" phx-click="close_trash_modal" class="btn">
+              {gettext("Back")}
+            </button>
+            <button type="submit" class="btn btn-warning">
+              <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_trash_modal"></div>
+    </div>
+  <% end %>
+
+  <%!-- Restore Modal --%>
+  <%= if @show_restore_modal do %>
+    <div id="restore-order-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Restore")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Restore order %{number} from the trash?", number: @order.order_number)}
+        </p>
+
+        <form id="restore-order-form" phx-submit="restore_order">
+          <div class="modal-action">
+            <button type="button" phx-click="close_restore_modal" class="btn">
+              {gettext("Back")}
+            </button>
+            <button type="submit" class="btn btn-warning">
+              <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_restore_modal"></div>
     </div>
   <% end %>
 </div>

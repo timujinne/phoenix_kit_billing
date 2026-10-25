@@ -15,7 +15,9 @@ defmodule PhoenixKitBilling.Web.Invoices do
   import PhoenixKitWeb.Components.Core.TableDefault
   import PhoenixKitWeb.Components.Core.TableRowMenu
   import PhoenixKitBilling.Web.Components.CurrencyDisplay
+  import PhoenixKitWeb.Components.Core.TimeDisplay
   import PhoenixKitBilling.Web.Components.InvoiceStatusBadge
+  import PhoenixKitBilling.Web.Components.TrashMark, only: [trashed_by_emails: 1]
 
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
@@ -38,6 +40,7 @@ defmodule PhoenixKitBilling.Web.Invoices do
         |> Trail.billing(gettext("Invoices"))
         |> assign(:project_title, project_title)
         |> assign(:invoices, [])
+        |> assign(:trashers, %{})
         |> assign(:total_count, 0)
         |> assign(:loading, true)
         |> assign_filter_defaults()
@@ -66,6 +69,7 @@ defmodule PhoenixKitBilling.Web.Invoices do
     socket
     |> assign(:search, "")
     |> assign(:status_filter, "all")
+    |> assign(:trash_view, false)
   end
 
   defp assign_pagination_defaults(socket) do
@@ -86,6 +90,7 @@ defmodule PhoenixKitBilling.Web.Invoices do
     |> assign(:per_page, per_page)
     |> assign(:search, search)
     |> assign(:status_filter, status)
+    |> assign(:trash_view, params["trash"] == "1")
   end
 
   defp parse_page(nil), do: 1
@@ -104,7 +109,8 @@ defmodule PhoenixKitBilling.Web.Invoices do
       page: page,
       per_page: per_page,
       search: search,
-      status_filter: status
+      status_filter: status,
+      trash_view: trash_view
     } = socket.assigns
 
     opts = [
@@ -112,6 +118,7 @@ defmodule PhoenixKitBilling.Web.Invoices do
       per_page: per_page,
       search: search,
       status: if(status == "all", do: nil, else: status),
+      trashed: if(trash_view, do: :only, else: :exclude),
       preload: [:order, :user]
     ]
 
@@ -120,6 +127,7 @@ defmodule PhoenixKitBilling.Web.Invoices do
 
     socket
     |> assign(:invoices, invoices)
+    |> assign(:trashers, if(trash_view, do: trashed_by_emails(invoices), else: %{}))
     |> assign(:total_count, total_count)
     |> assign(:total_pages, max(1, total_pages))
     |> assign(:loading, false)
@@ -142,7 +150,17 @@ defmodule PhoenixKitBilling.Web.Invoices do
 
   @impl true
   def handle_event("clear_filters", _params, socket) do
-    {:noreply, push_patch(socket, to: Routes.path("/admin/billing/invoices"))}
+    query = if socket.assigns.trash_view, do: "?trash=1", else: ""
+    {:noreply, push_patch(socket, to: Routes.path("/admin/billing/invoices#{query}"))}
+  end
+
+  # The tabs above the table: the invoices, or the trash.
+  @impl true
+  def handle_event("show_trash", %{"trash" => trash}, socket) do
+    query = build_url_params(socket.assigns, %{"page" => 1, "trash" => trash})
+
+    {:noreply,
+     push_patch(socket, to: Routes.path("/admin/billing/invoices" <> query_suffix(query)))}
   end
 
   @impl true
@@ -164,7 +182,14 @@ defmodule PhoenixKitBilling.Web.Invoices do
   # PubSub event handlers for real-time updates
   @impl true
   def handle_info({event, _invoice}, socket)
-      when event in [:invoice_created, :invoice_sent, :invoice_paid, :invoice_voided] do
+      when event in [
+             :invoice_created,
+             :invoice_sent,
+             :invoice_paid,
+             :invoice_voided,
+             :invoice_trashed,
+             :invoice_restored
+           ] do
     {:noreply, load_invoices(socket)}
   end
 
@@ -174,12 +199,16 @@ defmodule PhoenixKitBilling.Web.Invoices do
     {:noreply, socket}
   end
 
+  defp query_suffix(""), do: ""
+  defp query_suffix(query), do: "?" <> query
+
   defp build_url_params(assigns, new_params) do
     params = %{
       "page" => Map.get(new_params, "page", assigns.page),
       "per_page" => assigns.per_page,
       "search" => Map.get(new_params, "search", assigns.search),
-      "status" => Map.get(new_params, "status", assigns.status_filter)
+      "status" => Map.get(new_params, "status", assigns.status_filter),
+      "trash" => Map.get(new_params, "trash", if(assigns.trash_view, do: "1"))
     }
 
     params

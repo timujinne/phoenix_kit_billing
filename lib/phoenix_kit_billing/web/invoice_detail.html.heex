@@ -6,11 +6,31 @@
           {@invoice.invoice_number}
         </h1>
         <.invoice_status_badge status={@invoice.status} size={:md} />
+        <.trash_badge :if={Invoice.trashed?(@invoice)} id="invoice-trashed-badge" size={:md} />
       </div>
       <p class="text-sm text-base-content/60 mt-0.5">
         {gettext("Created")} <.time_ago datetime={@invoice.inserted_at} />
       </p>
       <:actions>
+        <%= if Invoice.trashed?(@invoice) do %>
+          <button
+            :if={@can_manage_invoices}
+            id="restore-invoice-button"
+            phx-click="open_restore_modal"
+            class="btn btn-warning btn-sm"
+          >
+            <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
+          </button>
+          <.link
+            navigate={
+              PhoenixKit.Utils.Routes.path("/admin/billing/invoices/#{@invoice.uuid}/print")
+            }
+            class="btn btn-outline btn-sm"
+            target="_blank"
+          >
+            <.icon name="hero-printer" class="w-4 h-4" /> {gettext("Print / PDF")}
+          </.link>
+        <% else %>
         <%!-- Send/Resend Invoice - available for all except void --%>
         <%= if @invoice.status != "void" do %>
           <button phx-click="open_send_modal" class="btn btn-info btn-sm">
@@ -114,8 +134,24 @@
             <.icon name="hero-paper-airplane" class="w-4 h-4" /> {gettext("Send Receipt")}
           </button>
         <% end %>
+
+        <%!-- Move to trash - a draft that was never sent; an issued invoice is voided --%>
+        <%= if @can_manage_invoices and Invoice.trashable?(@invoice) do %>
+          <button id="trash-invoice-button" phx-click="open_trash_modal" class="btn btn-outline btn-sm">
+            <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
+          </button>
+        <% end %>
+        <% end %>
       </:actions>
     </.admin_page_header>
+
+    <%!-- An invoice in the trash says so, since when and by whom. --%>
+    <.trash_notice
+      :if={Invoice.trashed?(@invoice)}
+      id="invoice-trashed-mark"
+      trashed_at={@invoice.trashed_at}
+      by={@trashed_by}
+    />
 
     <%!-- A void invoice says so loudly; the reason is the trail void_invoice/3 left. --%>
     <%= if @invoice.status == "void" do %>
@@ -1064,3 +1100,56 @@
     </div>
   <% end %>
 
+
+  <%!-- Move to Trash Modal --%>
+  <%= if @show_trash_modal do %>
+    <div id="trash-invoice-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Move to trash")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Move invoice %{number} to the trash?", number: @invoice.invoice_number)}
+        </p>
+        <p class="text-sm text-base-content/60">
+          {gettext(
+            "Nothing is deleted. The invoice number stays used and is never given to another invoice. Only a draft that was never sent can be moved to the trash; to cancel an issued invoice, void it instead."
+          )}
+        </p>
+
+        <form id="trash-invoice-form" phx-submit="trash_invoice">
+          <div class="modal-action">
+            <button type="button" phx-click="close_trash_modal" class="btn">
+              {gettext("Back")}
+            </button>
+            <button type="submit" class="btn btn-warning">
+              <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_trash_modal"></div>
+    </div>
+  <% end %>
+
+  <%!-- Restore Modal --%>
+  <%= if @show_restore_modal do %>
+    <div id="restore-invoice-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Restore")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Restore invoice %{number} from the trash?", number: @invoice.invoice_number)}
+        </p>
+
+        <form id="restore-invoice-form" phx-submit="restore_invoice">
+          <div class="modal-action">
+            <button type="button" phx-click="close_restore_modal" class="btn">
+              {gettext("Back")}
+            </button>
+            <button type="submit" class="btn btn-warning">
+              <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_restore_modal"></div>
+    </div>
+  <% end %>

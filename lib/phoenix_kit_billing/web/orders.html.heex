@@ -2,7 +2,13 @@
     <%!-- Header --%>
     <.admin_page_header back={PhoenixKit.Utils.Routes.path("/admin/billing")}>
       <h1 class="text-xl sm:text-2xl lg:text-3xl font-bold text-base-content">{gettext("Orders")}</h1>
-      <p class="text-sm text-base-content/60 mt-0.5">{gettext("%{count} total orders", count: @total_count)}</p>
+      <p class="text-sm text-base-content/60 mt-0.5">
+        <%= if @trash_view do %>
+          {gettext("%{count} orders in the trash", count: @total_count)}
+        <% else %>
+          {gettext("%{count} total orders", count: @total_count)}
+        <% end %>
+      </p>
       <:actions>
         <.link
           navigate={PhoenixKit.Utils.Routes.path("/admin/billing/orders/new")}
@@ -13,6 +19,30 @@
       </:actions>
     </.admin_page_header>
 
+    <%!-- The orders, or the trash --%>
+    <div role="tablist" class="tabs tabs-border mb-4">
+      <button
+        id="orders-tab-active"
+        type="button"
+        role="tab"
+        phx-click="show_trash"
+        phx-value-trash=""
+        class={["tab", !@trash_view && "tab-active"]}
+      >
+        {gettext("Orders")}
+      </button>
+      <button
+        id="orders-tab-trash"
+        type="button"
+        role="tab"
+        phx-click="show_trash"
+        phx-value-trash="1"
+        class={["tab gap-1", @trash_view && "tab-active"]}
+      >
+        <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Trash")}
+      </button>
+    </div>
+
     <%!-- Orders Table --%>
     <div class="card bg-base-100 shadow-xl">
       <div class="card-body p-0">
@@ -22,7 +52,14 @@
           </div>
         <% else %>
           <%= if Enum.empty?(@orders) do %>
-            <div class="text-center py-12">
+            <div :if={@trash_view} id="orders-trash-empty" class="text-center py-12">
+              <.icon name="hero-trash" class="w-16 h-16 mx-auto mb-4 text-base-content/30" />
+              <h3 class="text-xl font-semibold mb-2">{gettext("The trash is empty")}</h3>
+              <p class="text-base-content/60">
+                {gettext("Orders you move to the trash are kept here until you restore them")}
+              </p>
+            </div>
+            <div :if={!@trash_view} class="text-center py-12">
               <.icon
                 name="hero-clipboard-document-list"
                 class="w-16 h-16 mx-auto mb-4 text-base-content/30"
@@ -65,7 +102,11 @@
                         )
                     },
                     %{label: gettext("Date"), value: order.inserted_at}
-                  ]
+                  ] ++
+                    if(@trash_view,
+                      do: [%{label: gettext("Trashed"), value: order.trashed_at}],
+                      else: []
+                    )
                 end
               }
             >
@@ -133,6 +174,10 @@
                   <.table_default_header_cell>{gettext("Payment")}</.table_default_header_cell>
                   <.table_default_header_cell>{gettext("Total")}</.table_default_header_cell>
                   <.table_default_header_cell>{gettext("Date")}</.table_default_header_cell>
+                  <%= if @trash_view do %>
+                    <.table_default_header_cell>{gettext("Trashed")}</.table_default_header_cell>
+                    <.table_default_header_cell>{gettext("Trashed by")}</.table_default_header_cell>
+                  <% end %>
                   <.table_default_header_cell></.table_default_header_cell>
                 </.table_default_row>
               </.table_default_header>
@@ -174,6 +219,16 @@
                     <.table_default_cell class="text-sm text-base-content/60">
                       <.time_ago datetime={order.inserted_at} />
                     </.table_default_cell>
+                    <%= if @trash_view do %>
+                      <.table_default_cell class="text-sm text-base-content/60">
+                        <.time_ago datetime={order.trashed_at} id={"order-trashed-at-#{order.uuid}"} />
+                      </.table_default_cell>
+                      <.table_default_cell class="text-sm">
+                        <span id={"order-trashed-by-#{order.uuid}"}>
+                          {Map.get(@trashers, order.trashed_by_uuid, "-")}
+                        </span>
+                      </.table_default_cell>
+                    <% end %>
                     <.table_default_cell>
                       <.table_row_menu id={"menu-#{order.uuid}"}>
                         <.table_row_menu_link
@@ -200,7 +255,11 @@
                   current_page={@page}
                   total_pages={@total_pages}
                   base_path={PhoenixKit.Utils.Routes.path("/admin/billing/orders")}
-                  params={%{"search" => @search, "status" => @status_filter}}
+                  params={%{
+                    "search" => @search,
+                    "status" => @status_filter,
+                    "trash" => if(@trash_view, do: "1", else: "")
+                  }}
                 />
               </div>
             <% end %>

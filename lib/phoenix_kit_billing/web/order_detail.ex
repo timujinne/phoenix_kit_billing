@@ -17,6 +17,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   import PhoenixKitBilling.Web.Components.CurrencyDisplay
   import PhoenixKitBilling.Web.Components.InvoiceStatusBadge
   import PhoenixKitBilling.Web.Components.OrderStatusBadge
+  import PhoenixKitBilling.Web.Components.TrashMark
 
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
@@ -24,6 +25,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   alias PhoenixKitBilling.Activity
   alias PhoenixKitBilling.Errors
   alias PhoenixKitBilling.Events
+  alias PhoenixKitBilling.Order
   alias PhoenixKitBilling.Web.Trail
 
   @impl true
@@ -45,7 +47,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
 
   @impl true
   def handle_params(%{"id" => id}, _url, socket) do
-    case Billing.get_order(id, preload: [:billing_profile, :user, :invoices]) do
+    case Billing.get_order(id, preload: [:billing_profile, :user]) do
       nil ->
         {:noreply,
          socket
@@ -55,19 +57,18 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
       order ->
         socket =
           if socket.assigns[:loaded?] do
-            socket
-            |> assign(:order, order)
-            |> assign(:invoices, order.invoices)
+            assign_order(socket, order)
           else
             socket
             |> assign(:loaded?, true)
             |> Trail.billing(order.order_number, [Trail.orders()])
             |> assign(:project_title, Settings.get_project_title())
-            |> assign(:order, order)
-            |> assign(:invoices, order.invoices)
+            |> assign_order(order)
             |> assign(:show_status_modal, false)
             |> assign(:show_invoice_modal, false)
             |> assign(:show_cancel_modal, false)
+            |> assign(:show_trash_modal, false)
+            |> assign(:show_restore_modal, false)
           end
 
         {:noreply, socket}
@@ -81,13 +82,22 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
              :order_confirmed,
              :order_paid,
              :order_refunded,
-             :order_cancelled
+             :order_cancelled,
+             :order_trashed,
+             :order_restored
            ] do
     {:noreply, refresh_order(socket)}
   end
 
   def handle_info({event, %{order_uuid: order_uuid}}, socket)
-      when event in [:invoice_created, :invoice_paid, :invoice_voided, :invoice_sent] and
+      when event in [
+             :invoice_created,
+             :invoice_paid,
+             :invoice_voided,
+             :invoice_sent,
+             :invoice_trashed,
+             :invoice_restored
+           ] and
              not is_nil(order_uuid) do
     if socket.assigns[:order] && socket.assigns.order.uuid == order_uuid do
       {:noreply, refresh_order(socket)}
@@ -99,13 +109,26 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp refresh_order(%{assigns: %{order: %{uuid: uuid}}} = socket) do
-    case Billing.get_order(uuid, preload: [:billing_profile, :user, :invoices]) do
+    case Billing.get_order(uuid, preload: [:billing_profile, :user]) do
       nil -> socket
-      order -> assign(socket, order: order, invoices: order.invoices)
+      order -> assign_order(socket, order)
     end
   end
 
   defp refresh_order(socket), do: socket
+
+  # The order and what the page derives from it: its invoices (those in the
+  # trash are not shown), who trashed it, and whether the viewer may change it.
+  defp assign_order(socket, order) do
+    socket
+    |> assign(:order, order)
+    |> assign(:invoices, Billing.list_invoices_for_order(order.uuid))
+    |> assign(
+      :trashed_by,
+      order |> List.wrap() |> trashed_by_emails() |> Map.get(order.trashed_by_uuid)
+    )
+    |> assign(:can_manage_orders, Authz.can?(socket, :manage_orders))
+  end
 
   @impl true
   def handle_event("confirm_order", _params, socket) do
@@ -130,7 +153,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
            put_flash(
              socket,
              :error,
-             gettext("Failed to confirm order: %{reason}", reason: reason)
+             gettext("Failed to confirm order: %{reason}", reason: Errors.message(reason))
            )}
       end
     end)
@@ -156,7 +179,11 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
 
         {:error, reason} ->
           {:noreply,
-           put_flash(socket, :error, gettext("Failed to mark as paid: %{reason}", reason: reason))}
+           put_flash(
+             socket,
+             :error,
+             gettext("Failed to mark as paid: %{reason}", reason: Errors.message(reason))
+           )}
       end
     end)
   end
@@ -209,6 +236,94 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   end
 
   @impl true
+  def handle_event("open_trash_modal", _params, socket) do
+    {:noreply, assign(socket, :show_trash_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_trash_modal", _params, socket) do
+    {:noreply, assign(socket, :show_trash_modal, false)}
+  end
+
+  @impl true
+  def handle_event("trash_order", _params, socket) do
+    Authz.authorize(socket, :manage_orders, fn ->
+      actor_uuid = Activity.actor_uuid(socket)
+
+      case Billing.trash_order(socket.assigns.order, actor_uuid: actor_uuid) do
+        {:ok, order} ->
+          Activity.log("billing.order_trashed",
+            actor_uuid: actor_uuid,
+            actor_role: Activity.actor_role(socket),
+            resource_type: "order",
+            resource_uuid: order.uuid,
+            metadata: %{"order_number" => order.order_number, "status" => order.status}
+          )
+
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_trash_modal, false)
+           |> put_flash(:info, gettext("Order moved to the trash"))}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_trash_modal, false)
+           |> put_flash(
+             :error,
+             gettext("Failed to move the order to the trash: %{reason}",
+               reason: Errors.message(reason)
+             )
+           )}
+      end
+    end)
+  end
+
+  @impl true
+  def handle_event("open_restore_modal", _params, socket) do
+    {:noreply, assign(socket, :show_restore_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_restore_modal", _params, socket) do
+    {:noreply, assign(socket, :show_restore_modal, false)}
+  end
+
+  @impl true
+  def handle_event("restore_order", _params, socket) do
+    Authz.authorize(socket, :manage_orders, fn ->
+      case Billing.restore_order(socket.assigns.order) do
+        {:ok, order} ->
+          Activity.log("billing.order_restored",
+            actor_uuid: Activity.actor_uuid(socket),
+            actor_role: Activity.actor_role(socket),
+            resource_type: "order",
+            resource_uuid: order.uuid,
+            metadata: %{"order_number" => order.order_number, "status" => order.status}
+          )
+
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_restore_modal, false)
+           |> put_flash(:info, gettext("Order restored from the trash"))}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_restore_modal, false)
+           |> put_flash(
+             :error,
+             gettext("Failed to restore the order: %{reason}", reason: Errors.message(reason))
+           )}
+      end
+    end)
+  end
+
+  @impl true
   def handle_event("generate_invoice", _params, socket) do
     Authz.authorize(socket, :manage_orders, fn ->
       case Billing.create_invoice_from_order(socket.assigns.order) do
@@ -235,7 +350,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
              gettext("Invoice %{number} created", number: invoice.invoice_number)
            )}
 
-        {:error, changeset} ->
+        {:error, %Ecto.Changeset{} = changeset} ->
           errors = format_changeset_errors(changeset)
 
           {:noreply,
@@ -243,6 +358,14 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
              socket,
              :error,
              gettext("Failed to create invoice: %{errors}", errors: errors)
+           )}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             gettext("Failed to create invoice: %{errors}", errors: Errors.message(reason))
            )}
       end
     end)

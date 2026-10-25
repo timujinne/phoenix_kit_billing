@@ -20,6 +20,7 @@ defmodule PhoenixKitBilling.Web.OrderForm do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.Activity
+  alias PhoenixKitBilling.Errors
   alias PhoenixKitBilling.Order
   alias PhoenixKitBilling.Paths
   alias PhoenixKitBilling.Web.Trail
@@ -313,8 +314,13 @@ defmodule PhoenixKitBilling.Web.OrderForm do
          |> put_flash(:info, gettext("Order saved successfully"))
          |> push_navigate(to: Routes.path("/admin/billing/orders/#{order.uuid}"))}
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
+
+      # A refusal that is not about a field: an order in the trash, or one that
+      # can no longer be edited.
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   rescue
     e ->
