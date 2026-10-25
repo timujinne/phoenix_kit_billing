@@ -2585,28 +2585,45 @@ defmodule PhoenixKitBilling do
   deleting the order would silently detach any invoice - even a void one -
   and lose what ties it to the order. An order with an invoice is refused.
 
+  Takes a row lock on the order and checks the status against the stored row,
+  not the struct's.
+
   Returns `{:ok, order}`, `{:error, :can_only_delete_drafts}`,
-  `{:error, :order_has_invoices}` or `{:error, changeset}`.
+  `{:error, :order_has_invoices}`, `{:error, :not_found}` when the order is
+  gone, or `{:error, changeset}`.
   """
   def delete_order(%Order{status: "draft", uuid: uuid} = order) do
     repo().transaction(fn ->
       # FOR UPDATE conflicts with the FOR KEY SHARE an invoice insert takes on
       # the order, so an invoice created while this runs either is seen below
-      # or waits and then fails its foreign key - it is never detached.
-      Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().all()
+      # or waits and then fails its foreign key - it is never detached. The
+      # status is the stored one: the struct may be from before a confirmation.
+      case Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one() do
+        nil ->
+          repo().rollback(:not_found)
 
-      if repo().exists?(from(i in Invoice, where: i.order_uuid == ^uuid)) do
-        repo().rollback(:order_has_invoices)
-      else
-        case repo().delete(order) do
-          {:ok, deleted} -> deleted
-          {:error, changeset} -> repo().rollback(changeset)
-        end
+        %Order{status: "draft"} ->
+          delete_draft_without_invoices(order)
+
+        %Order{} ->
+          repo().rollback(:can_only_delete_drafts)
       end
     end)
   end
 
   def delete_order(_order), do: {:error, :can_only_delete_drafts}
+
+  # Inside delete_order/1's transaction, with the order row locked.
+  defp delete_draft_without_invoices(%Order{uuid: uuid} = order) do
+    if repo().exists?(from(i in Invoice, where: i.order_uuid == ^uuid)) do
+      repo().rollback(:order_has_invoices)
+    else
+      case repo().delete(order) do
+        {:ok, deleted} -> deleted
+        {:error, changeset} -> repo().rollback(changeset)
+      end
+    end
+  end
 
   @order_sync_types %{
     state: :string,

@@ -54,6 +54,21 @@ defmodule PhoenixKitBilling.Integration.DeleteOrderTest do
       assert Billing.get_invoice!(invoice.uuid).order_uuid == draft.uuid
     end
 
+    test "refuses a stale draft struct once the order was confirmed", %{user: user} do
+      {:ok, stale} = create_order(user)
+      {:ok, _confirmed} = Billing.confirm_order(Billing.get_order!(stale.uuid))
+
+      assert {:error, :can_only_delete_drafts} = Billing.delete_order(stale)
+      assert Billing.get_order!(stale.uuid).status == "confirmed"
+    end
+
+    test "reports an order that is already gone instead of raising", %{user: user} do
+      {:ok, draft} = create_order(user)
+      {:ok, _} = Billing.delete_order(draft)
+
+      assert {:error, :not_found} = Billing.delete_order(draft)
+    end
+
     test "still refuses an order that is not a draft", %{user: user} do
       {:ok, order} = create_order(user)
       {:ok, confirmed} = Billing.confirm_order(order)
