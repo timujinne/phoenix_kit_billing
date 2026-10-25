@@ -684,13 +684,13 @@ defmodule PhoenixKitBilling do
   end
 
   defp count_orders do
-    Order |> repo().aggregate(:count)
+    Order |> not_trashed() |> repo().aggregate(:count)
   rescue
     e -> dashboard_stat_fallback("count_orders", 0, e)
   end
 
   defp count_invoices do
-    Invoice |> repo().aggregate(:count)
+    Invoice |> not_trashed() |> repo().aggregate(:count)
   rescue
     e -> dashboard_stat_fallback("count_invoices", 0, e)
   end
@@ -703,6 +703,7 @@ defmodule PhoenixKitBilling do
 
   defp count_orders_since(date) do
     Order
+    |> not_trashed()
     |> where([o], o.inserted_at >= ^NaiveDateTime.new!(date, ~T[00:00:00]))
     |> repo().aggregate(:count)
   rescue
@@ -711,6 +712,7 @@ defmodule PhoenixKitBilling do
 
   defp count_invoices_since(date) do
     Invoice
+    |> not_trashed()
     |> where([i], i.inserted_at >= ^NaiveDateTime.new!(date, ~T[00:00:00]))
     |> repo().aggregate(:count)
   rescue
@@ -719,6 +721,7 @@ defmodule PhoenixKitBilling do
 
   defp count_invoices_by_status(status) do
     Invoice
+    |> not_trashed()
     |> where([i], i.status == ^status)
     |> repo().aggregate(:count)
   rescue
@@ -728,6 +731,7 @@ defmodule PhoenixKitBilling do
   defp calculate_paid_revenue do
     result =
       Invoice
+      |> not_trashed()
       |> where([i], i.status == "paid")
       |> select([i], sum(i.total))
       |> repo().one()
@@ -740,6 +744,7 @@ defmodule PhoenixKitBilling do
   defp calculate_pending_revenue do
     result =
       Invoice
+      |> not_trashed()
       |> where([i], i.status in ["sent", "overdue"])
       |> select([i], sum(i.total))
       |> repo().one()
@@ -2193,6 +2198,9 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists all orders with optional filters.
+
+  Orders in the trash are left out. `trashed: :only` lists just the trash,
+  `trashed: :include` both.
   """
   def list_orders(filters \\ %{}) do
     Order
@@ -2204,10 +2212,14 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists orders for a specific user.
+
+  Takes the same filters as `list_orders/1`, so the trash is left out by default.
+  The `:invoices` of an order preloaded through `:preload` leave the trash out
+  too: this is the list a customer sees.
   """
   def list_user_orders(user_uuid, filters \\ %{}, opts \\ []) do
     user_uuid = extract_user_uuid(user_uuid)
-    preloads = Keyword.get(opts, :preload, [])
+    preloads = opts |> Keyword.get(:preload, []) |> without_trashed_invoices()
 
     Order
     |> where([o], o.user_uuid == ^user_uuid)
@@ -2219,6 +2231,9 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists orders with count for pagination.
+
+  Orders in the trash are left out, and not counted. `trashed: :only` lists just
+  the trash (the one trashed last first), `trashed: :include` both.
   """
   def list_orders_with_count(opts \\ []) do
     page = Keyword.get(opts, :page, 1)
@@ -2226,8 +2241,9 @@ defmodule PhoenixKitBilling do
     offset = (page - 1) * per_page
     search = Keyword.get(opts, :search)
     status = Keyword.get(opts, :status)
+    trashed = trashed_option(opts)
 
-    base_query = Order
+    base_query = scope_trashed(Order, trashed)
 
     base_query =
       case status do
@@ -2261,7 +2277,7 @@ defmodule PhoenixKitBilling do
 
     orders =
       base_query
-      |> order_by([o], desc: o.inserted_at)
+      |> order_listing(trashed)
       |> limit(^per_page)
       |> offset(^offset)
       |> preload(^preloads)
@@ -2313,11 +2329,15 @@ defmodule PhoenixKitBilling do
   @doc """
   Gets an order by UUID with optional preloads.
   Used for public-facing URLs to prevent ID enumeration.
+
+  An order in the trash is not found, as it is on any other customer-facing
+  page; pass `trashed: :include` to find it.
   """
   def get_order_by_uuid(uuid, opts \\ []) do
     preloads = Keyword.get(opts, :preload, [:billing_profile])
 
     Order
+    |> scope_trashed(trashed_option(opts))
     |> where([o], o.uuid == ^uuid)
     |> preload(^preloads)
     |> repo().one()
@@ -2408,17 +2428,28 @@ defmodule PhoenixKitBilling do
 
   A new `order_number` of this year's shape with the configured prefix
   (`PREFIX-YYYY-NNNN`) lifts the year's counter to at least its NNNN, so the
-  counter never reaches it. The update opens a transaction only then.
+  counter never reaches it.
+
+  Returns `{:ok, order}`, `{:error, :order_not_editable}`,
+  `{:error, :order_trashed}` for an order in the trash (checked on the stored
+  row too) or `{:error, changeset}`. Refusals are returned, not rolled back, so a
+  transaction of the caller's stays usable.
   """
+  def update_order(%Order{trashed_at: %DateTime{}}, _attrs), do: {:error, :order_trashed}
+
   def update_order(%Order{} = order, attrs) do
     if Order.editable?(order) do
       # Update billing_snapshot if billing_profile_uuid changed
       attrs = maybe_update_billing_snapshot(order, attrs)
 
+      # The order may have gone to the trash since the struct was read: that is
+      # checked on the locked row, right before the write.
       result =
         order
         |> Order.changeset(attrs)
-        |> update_numbered(order_number: "order")
+        |> update_numbered([order_number: "order"],
+          check: fn -> ensure_order_not_trashed(order.uuid) end
+        )
 
       case result do
         {:ok, updated_order} ->
@@ -2616,14 +2647,18 @@ defmodule PhoenixKitBilling do
   # Refusals are RETURNED, not rolled back: this runs inside the invoice-paid
   # transaction too (`maybe_mark_linked_order_paid/1`), where a rollback would
   # abort the whole settlement.
+  #
+  # An order in the trash changes in no way: that is read off the locked row as
+  # well, and refused with `:order_trashed` before `fun` runs.
   defp transition_order(%Order{} = order, fun) when is_function(fun, 1) do
-    case repo().transaction(fn -> fun.(Map.merge(order, lock_order_row(order))) end) do
-      {:ok, result} -> result
-      {:error, reason} -> {:error, reason}
-    end
+    unwrap_transaction(fn ->
+      current = Map.merge(order, lock_order_row(order))
+
+      if Order.trashed?(current), do: {:error, :order_trashed}, else: fun.(current)
+    end)
   end
 
-  # SELECT status, internal_notes, metadata ... FOR NO KEY UPDATE. That lock
+  # SELECT status, internal_notes, metadata, trashed_at ... FOR NO KEY UPDATE. That lock
   # queues transitions behind each other (it conflicts with itself and with
   # the UPDATE that follows) but not with the FOR KEY SHARE an invoice insert
   # takes on the order through its foreign key. A row that has vanished keeps
@@ -2633,7 +2668,7 @@ defmodule PhoenixKitBilling do
     Order
     |> where([o], o.uuid == ^uuid)
     |> lock("FOR NO KEY UPDATE")
-    |> select([o], map(o, [:status, :internal_notes, :metadata]))
+    |> select([o], map(o, [:status, :internal_notes, :metadata, :trashed_at]))
     |> repo().one()
     |> Kernel.||(%{})
   end
@@ -2649,10 +2684,13 @@ defmodule PhoenixKitBilling do
   not the struct's.
 
   Returns `{:ok, order}`, `{:error, :can_only_delete_drafts}`,
-  `{:error, :order_has_invoices}`, `{:error, :not_found}` when the order is
-  gone, or `{:error, changeset}`. Refusals are returned, not rolled back, so a
+  `{:error, :order_has_invoices}`, `{:error, :order_trashed}` for an order in
+  the trash, `{:error, :not_found}` when the order is gone, or
+  `{:error, changeset}`. Refusals are returned, not rolled back, so a
   transaction of the caller's stays usable.
   """
+  def delete_order(%Order{trashed_at: %DateTime{}}), do: {:error, :order_trashed}
+
   def delete_order(%Order{status: "draft", uuid: uuid} = order) do
     unwrap_transaction(fn ->
       # FOR UPDATE conflicts with the FOR KEY SHARE an invoice insert takes on
@@ -2661,6 +2699,7 @@ defmodule PhoenixKitBilling do
       # status is the stored one: the struct may be from before a confirmation.
       case Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one() do
         nil -> {:error, :not_found}
+        %Order{trashed_at: %DateTime{}} -> {:error, :order_trashed}
         %Order{status: "draft"} -> delete_draft_without_invoices(order)
         %Order{} -> {:error, :can_only_delete_drafts}
       end
@@ -2676,6 +2715,131 @@ defmodule PhoenixKitBilling do
     else
       repo().delete(order)
     end
+  end
+
+  @doc """
+  Moves an order to the trash.
+
+  Only a `draft` or `cancelled` order goes there, and only while none of its
+  invoices is open - an invoice that is neither void nor in the trash. The status
+  does not change, nothing is emailed, and nothing is deleted: `restore_order/2`
+  brings it back.
+
+  ## Options
+
+  - `:actor_uuid` - the user who does it, kept in `trashed_by_uuid`
+
+  Takes a row lock on the order and decides on the stored row, not the struct's:
+  the order may have been confirmed, or been given an invoice, since it was read.
+  The lock also keeps an invoice from being created for the order while this
+  runs.
+
+  Returns `{:ok, order}` (without the preloads of the struct passed in),
+  `{:error, :order_not_trashable}` (status other than `draft` or `cancelled`),
+  `{:error, :order_has_open_invoices}`, `{:error, :already_trashed}` or
+  `{:error, :not_found}` when the order is gone. Refusals are returned, not
+  rolled back, so a transaction of the caller's stays usable. On success an
+  `:order_trashed` event is broadcast (after the transaction, unless it is the
+  caller's); the other order events are not.
+  """
+  def trash_order(%Order{uuid: uuid}, opts \\ []) do
+    result =
+      unwrap_transaction(fn ->
+        # FOR UPDATE conflicts with the FOR KEY SHARE an invoice insert takes on
+        # the order, so an invoice created while this runs is either seen below
+        # or waits and then finds the order in the trash.
+        case lock_order_for_update(uuid) do
+          nil -> {:error, :not_found}
+          %Order{} = locked -> trash_locked_order(locked, opts[:actor_uuid])
+        end
+      end)
+
+    case result do
+      {:ok, trashed} ->
+        Events.broadcast_order_trashed(trashed)
+        {:ok, trashed}
+
+      error ->
+        error
+    end
+  end
+
+  defp trash_locked_order(locked, actor_uuid) do
+    cond do
+      Order.trashed?(locked) ->
+        {:error, :already_trashed}
+
+      not Order.trashable?(locked) ->
+        {:error, :order_not_trashable}
+
+      open_invoices?(locked.uuid) ->
+        {:error, :order_has_open_invoices}
+
+      true ->
+        locked |> Order.trash_changeset(actor_uuid) |> repo().update()
+    end
+  end
+
+  # An invoice counts against its order until it is void or in the trash.
+  defp open_invoices?(order_uuid) do
+    repo().exists?(
+      from(i in Invoice,
+        where: i.order_uuid == ^order_uuid and i.status != "void" and is_nil(i.trashed_at)
+      )
+    )
+  end
+
+  @doc """
+  Takes an order out of the trash. Nothing else about it changes.
+
+  Takes a row lock on the order and decides on the stored row. The options are
+  accepted for symmetry with `trash_order/2` and not used.
+
+  Returns `{:ok, order}` (without the preloads of the struct passed in),
+  `{:error, :not_trashed}` or `{:error, :not_found}` when the order is gone.
+  Refusals are returned, not rolled back. On success an `:order_restored` event
+  is broadcast.
+  """
+  def restore_order(%Order{uuid: uuid}, _opts \\ []) do
+    result =
+      unwrap_transaction(fn ->
+        case lock_order_for_update(uuid) do
+          nil ->
+            {:error, :not_found}
+
+          %Order{} = locked ->
+            if Order.trashed?(locked),
+              do: locked |> Order.restore_changeset() |> repo().update(),
+              else: {:error, :not_trashed}
+        end
+      end)
+
+    case result do
+      {:ok, restored} ->
+        Events.broadcast_order_restored(restored)
+        {:ok, restored}
+
+      error ->
+        error
+    end
+  end
+
+  defp lock_order_for_update(uuid) do
+    Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one()
+  end
+
+  # Before a write to an order, on the locked row: the order may have gone to
+  # the trash since the caller read it. NO KEY UPDATE, like `lock_order_row/1`.
+  defp ensure_order_not_trashed(uuid) do
+    trashed_at =
+      from(o in Order,
+        where: o.uuid == ^uuid,
+        lock: "FOR NO KEY UPDATE",
+        select: o.trashed_at
+      )
+      |> repo().one()
+
+    if trashed_at, do: {:error, :order_trashed}, else: :ok
   end
 
   @order_sync_types %{
@@ -2820,7 +2984,46 @@ defmodule PhoenixKitBilling do
 
   defp now_iso, do: DateTime.to_iso8601(UtilsDate.utc_now())
 
+  # -- the trash ---------------------------------------------------------------
+
+  # What a listing does with the trash: `trashed: :only | :include` in its
+  # filters or options, anything else (or nothing) leaves the trash out.
+  defp trashed_option(opts) do
+    Enum.find_value(opts, :exclude, fn
+      {:trashed, mode} when mode in [:only, :include] -> mode
+      _ -> nil
+    end)
+  end
+
+  defp scope_trashed(query, :only), do: where(query, [r], not is_nil(r.trashed_at))
+  defp scope_trashed(query, :include), do: query
+  defp scope_trashed(query, _exclude), do: not_trashed(query)
+
+  # Leaves the trash out of a query over orders or invoices.
+  defp not_trashed(query), do: where(query, [r], is_nil(r.trashed_at))
+
+  # Newest first; in the trash, the one trashed last first.
+  defp order_listing(query, :only),
+    do: order_by(query, [r], desc: r.trashed_at, desc: r.inserted_at)
+
+  defp order_listing(query, _trashed), do: order_by(query, [r], desc: r.inserted_at)
+
+  # The invoices of an order that a customer may see: not the ones in the trash.
+  defp without_trashed_invoices(preloads) do
+    preloads
+    |> List.wrap()
+    |> Enum.map(fn
+      :invoices -> {:invoices, not_trashed(Invoice)}
+      {:invoices, %Ecto.Query{}} = preload -> preload
+      {:invoices, {%Ecto.Query{}, _nested}} = preload -> preload
+      {:invoices, nested} -> {:invoices, {not_trashed(Invoice), nested}}
+      other -> other
+    end)
+  end
+
   defp apply_order_filters(query, filters) do
+    query = scope_trashed(query, trashed_option(filters))
+
     Enum.reduce(filters, query, fn
       {:status, status}, q when is_binary(status) ->
         where(q, [o], o.status == ^status)
@@ -2986,6 +3189,9 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists all invoices with optional filters.
+
+  Invoices in the trash are left out. `trashed: :only` lists just the trash,
+  `trashed: :include` both.
   """
   def list_invoices(filters \\ %{}) do
     Invoice
@@ -3000,7 +3206,9 @@ defmodule PhoenixKitBilling do
 
   Accepts the shared invoice filters, including `:limit` for callers that
   only need the most recent few (rollup panels) and must not pull a
-  long-standing customer's entire invoice history into memory.
+  long-standing customer's entire invoice history into memory. Invoices in the
+  trash are left out unless `trashed: :include` or `trashed: :only` says
+  otherwise.
   """
   def list_user_invoices(user_uuid, filters \\ %{}) do
     user_uuid = extract_user_uuid(user_uuid)
@@ -3014,6 +3222,9 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists invoices with count for pagination.
+
+  Invoices in the trash are left out, and not counted. `trashed: :only` lists
+  just the trash (the one trashed last first), `trashed: :include` both.
   """
   def list_invoices_with_count(opts \\ []) do
     page = Keyword.get(opts, :page, 1)
@@ -3021,8 +3232,9 @@ defmodule PhoenixKitBilling do
     offset = (page - 1) * per_page
     search = Keyword.get(opts, :search)
     status = Keyword.get(opts, :status)
+    trashed = trashed_option(opts)
 
-    base_query = Invoice
+    base_query = scope_trashed(Invoice, trashed)
 
     base_query =
       case status do
@@ -3056,7 +3268,7 @@ defmodule PhoenixKitBilling do
 
     invoices =
       base_query
-      |> order_by([i], desc: i.inserted_at)
+      |> order_listing(trashed)
       |> limit(^per_page)
       |> offset(^offset)
       |> preload(^preloads)
@@ -3097,9 +3309,13 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Lists invoices for a specific order.
+
+  Invoices in the trash are left out; `trashed: :only` lists just those,
+  `trashed: :include` all of them.
   """
-  def list_invoices_for_order(order_uuid) when is_binary(order_uuid) do
+  def list_invoices_for_order(order_uuid, opts \\ []) when is_binary(order_uuid) do
     Invoice
+    |> scope_trashed(trashed_option(opts))
     |> where([i], i.order_uuid == ^order_uuid)
     |> order_by([i], desc: i.inserted_at)
     |> repo().all()
@@ -3120,7 +3336,12 @@ defmodule PhoenixKitBilling do
 
   #{@create_note}
   """
-  def create_invoice_from_order(%Order{} = order, opts \\ []) do
+  def create_invoice_from_order(order, opts \\ [])
+
+  def create_invoice_from_order(%Order{trashed_at: %DateTime{}}, _opts),
+    do: {:error, :order_trashed}
+
+  def create_invoice_from_order(%Order{} = order, opts) do
     config = get_config()
 
     opts =
@@ -3139,14 +3360,20 @@ defmodule PhoenixKitBilling do
       order |> Invoice.from_order(opts) |> Invoice.changeset(%{})
     end
 
-    insert_invoice(build, config, source)
+    insert_invoice(build, config, source, order.uuid)
   end
 
   # The PubSub event goes out after the transaction that inserts the invoice
   # has ended - the commit, unless the caller's own transaction encloses this
   # call.
-  defp insert_invoice(build, config, source) do
-    case insert_numbered(build, "invoice", config.invoice_prefix, :invoice_number, source) do
+  #
+  # An invoice of an order that is in the trash is refused (`:order_trashed`),
+  # checked in the insert's transaction with the order row locked (see
+  # `ensure_order_not_trashed_for_invoice/1`).
+  defp insert_invoice(build, config, source, order_uuid) do
+    guard = fn -> ensure_order_not_trashed_for_invoice(order_uuid) end
+
+    case insert_numbered(build, "invoice", config.invoice_prefix, :invoice_number, source, guard) do
       {:ok, created_invoice} ->
         Events.broadcast_invoice_created(created_invoice)
         {:ok, created_invoice}
@@ -3176,7 +3403,29 @@ defmodule PhoenixKitBilling do
       Invoice.changeset(%Invoice{}, attrs)
     end
 
-    insert_invoice(build, config, source)
+    order_uuid = Map.get(attrs, :order_uuid) || Map.get(attrs, "order_uuid")
+    insert_invoice(build, config, source, order_uuid)
+  end
+
+  # FOR KEY SHARE: what the insert's foreign key takes on the order anyway, and
+  # it conflicts with the FOR UPDATE `trash_order/2` takes - so an order is
+  # trashed before this looks (and the invoice is refused) or after the invoice
+  # is in (and the trash is refused), never in between. Taken before the invoice
+  # counter, which no path that waits for a FOR UPDATE on an order holds.
+  defp ensure_order_not_trashed_for_invoice(order_uuid) do
+    if is_binary(order_uuid) and UUIDUtils.valid?(order_uuid) do
+      trashed_at =
+        from(o in Order,
+          where: o.uuid == ^order_uuid,
+          lock: "FOR KEY SHARE",
+          select: o.trashed_at
+        )
+        |> repo().one()
+
+      if trashed_at, do: {:error, :order_trashed}, else: :ok
+    else
+      :ok
+    end
   end
 
   @doc """
@@ -3192,6 +3441,7 @@ defmodule PhoenixKitBilling do
   counter - the documented lock order).
 
   Returns `{:ok, invoice}`, `{:error, :invoice_not_editable}`,
+  `{:error, :invoice_trashed}` for an invoice in the trash,
   `{:error, :invoice_not_found}` or `{:error, changeset}`. Refusals are
   returned, not rolled back, so a transaction of the caller's stays usable.
   """
@@ -3200,6 +3450,9 @@ defmodule PhoenixKitBilling do
       case fetch_locked_invoice(invoice) do
         nil ->
           {:error, :invoice_not_found}
+
+        %Invoice{trashed_at: %DateTime{}} ->
+          {:error, :invoice_trashed}
 
         locked ->
           if Invoice.editable?(locked) do
@@ -3224,6 +3477,93 @@ defmodule PhoenixKitBilling do
   end
 
   @doc """
+  Moves a draft invoice to the trash.
+
+  Only a `draft` that was never sent goes there; an issued invoice is voided
+  (`void_invoice/3`), never trashed. The status does not change, nothing is
+  emailed, and nothing is deleted - **the invoice's number stays used**, so it is
+  never handed out again. `restore_invoice/2` brings the invoice back.
+
+  ## Options
+
+  - `:actor_uuid` - the user who does it, kept in `trashed_by_uuid`
+
+  Takes a row lock on the invoice and decides on the stored row, not the
+  struct's: the invoice may have been sent or voided since it was read.
+
+  Returns `{:ok, invoice}` (without the preloads of the struct passed in),
+  `{:error, :invoice_not_trashable}`, `{:error, :already_trashed}` or
+  `{:error, :invoice_not_found}`. Refusals are returned, not rolled back, so a
+  transaction of the caller's stays usable. On success an `:invoice_trashed`
+  event is broadcast (after the transaction, unless it is the caller's); no
+  durable `PhoenixKitBilling.InvoiceEvents` event is enqueued.
+  """
+  def trash_invoice(%Invoice{} = invoice, opts \\ []) do
+    result =
+      unwrap_transaction(fn ->
+        case fetch_locked_invoice(invoice) do
+          nil -> {:error, :invoice_not_found}
+          locked -> trash_locked_invoice(locked, opts[:actor_uuid])
+        end
+      end)
+
+    case result do
+      {:ok, trashed} ->
+        Events.broadcast_invoice_trashed(trashed)
+        {:ok, trashed}
+
+      error ->
+        error
+    end
+  end
+
+  defp trash_locked_invoice(locked, actor_uuid) do
+    cond do
+      Invoice.trashed?(locked) -> {:error, :already_trashed}
+      not Invoice.trashable?(locked) -> {:error, :invoice_not_trashable}
+      true -> locked |> Invoice.trash_changeset(actor_uuid) |> repo().update()
+    end
+  end
+
+  @doc """
+  Takes an invoice out of the trash. Nothing else about it changes.
+
+  Takes a row lock on the invoice, and then on its order, and decides on the
+  stored rows. An order in the trash has no open invoice, so an invoice cannot
+  come back to it: restore the order first.
+
+  Returns `{:ok, invoice}` (without the preloads of the struct passed in),
+  `{:error, :not_trashed}`, `{:error, :order_trashed}` when its order is in the
+  trash or `{:error, :invoice_not_found}`. Refusals are returned, not rolled
+  back. On success an `:invoice_restored` event is broadcast. The options are
+  accepted for symmetry with `trash_invoice/2` and not used.
+  """
+  def restore_invoice(%Invoice{} = invoice, _opts \\ []) do
+    result =
+      unwrap_transaction(fn ->
+        case fetch_locked_invoice(invoice) do
+          nil ->
+            {:error, :invoice_not_found}
+
+          locked ->
+            with true <- Invoice.trashed?(locked) || {:error, :not_trashed},
+                 :ok <- ensure_order_not_trashed_for_invoice(locked.order_uuid) do
+              locked |> Invoice.restore_changeset() |> repo().update()
+            end
+        end
+      end)
+
+    case result do
+      {:ok, restored} ->
+        Events.broadcast_invoice_restored(restored)
+        {:ok, restored}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
   Sends an invoice (marks as sent and sends email).
 
   Options:
@@ -3236,8 +3576,15 @@ defmodule PhoenixKitBilling do
   `false`, otherwise whatever `send_invoice_email/2` returned — check it
   if the caller cares whether the customer was actually emailed, not
   just whether the invoice record itself updated.
+
+  An invoice in the trash is refused with `{:error, :invoice_trashed}`, and
+  nobody is emailed.
   """
-  def send_invoice(%Invoice{} = invoice, opts \\ []) do
+  def send_invoice(invoice, opts \\ [])
+
+  def send_invoice(%Invoice{trashed_at: %DateTime{}}, _opts), do: {:error, :invoice_trashed}
+
+  def send_invoice(%Invoice{} = invoice, opts) do
     if Invoice.sendable?(invoice) or Invoice.resendable?(invoice) do
       do_send_invoice(invoice, opts)
     else
@@ -3325,6 +3672,7 @@ defmodule PhoenixKitBilling do
 
   defp send_changeset(locked) do
     cond do
+      Invoice.trashed?(locked) -> {:error, :invoice_trashed}
       # First send - change status to "sent"
       Invoice.sendable?(locked) -> {:ok, Invoice.status_changeset(locked, "sent")}
       # Resend - don't change status, just record in history
@@ -3336,7 +3684,11 @@ defmodule PhoenixKitBilling do
   @doc """
   Sends invoice email to the customer.
   """
-  def send_invoice_email(%Invoice{} = invoice, opts \\ []) do
+  def send_invoice_email(invoice, opts \\ [])
+
+  def send_invoice_email(%Invoice{trashed_at: %DateTime{}}, _opts), do: {:error, :invoice_trashed}
+
+  def send_invoice_email(%Invoice{} = invoice, opts) do
     # Preload user if not loaded
     invoice = ensure_preloaded(invoice, [:order, :user])
 
@@ -4022,7 +4374,12 @@ defmodule PhoenixKitBilling do
   Takes the invoice row lock, then a transaction number (for the settlement
   row) and a receipt number. #{@payment_note}
   """
-  def mark_invoice_paid(%Invoice{} = invoice, admin_user \\ nil) do
+  def mark_invoice_paid(invoice, admin_user \\ nil)
+
+  def mark_invoice_paid(%Invoice{trashed_at: %DateTime{}}, _admin_user),
+    do: {:error, :invoice_trashed}
+
+  def mark_invoice_paid(%Invoice{} = invoice, admin_user) do
     if Invoice.payable?(invoice) do
       config = get_config()
 
@@ -4038,6 +4395,7 @@ defmodule PhoenixKitBilling do
           # The payable? check above ran on the caller's struct, before the
           # lock. A void committed in between would otherwise get its status
           # overwritten by "paid" (and the transition validation raises).
+          if Invoice.trashed?(locked), do: repo().rollback(:invoice_trashed)
           unless Invoice.payable?(locked), do: repo().rollback(:invoice_not_payable)
 
           # A settlement needs a LEDGER ROW, not just a status and a number.
@@ -4135,8 +4493,9 @@ defmodule PhoenixKitBilling do
   own transaction only if holding that lock until commit is fine.
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
-  `{:error, :invoice_not_voidable}`, `{:error, :invoice_not_found}` when the
-  invoice is gone, or `{:error, changeset}`. Refusals are returned, not rolled
+  `{:error, :invoice_not_voidable}`, `{:error, :invoice_trashed}` for an invoice
+  in the trash, `{:error, :invoice_not_found}` when the invoice is gone, or
+  `{:error, changeset}`. Refusals are returned, not rolled
   back, so a transaction of the caller's stays usable.
   """
   def void_invoice(%Invoice{} = invoice, reason \\ nil, opts \\ []) do
@@ -4160,6 +4519,9 @@ defmodule PhoenixKitBilling do
     case fetch_locked_invoice(invoice) do
       nil ->
         {:error, :invoice_not_found}
+
+      %Invoice{trashed_at: %DateTime{}} ->
+        {:error, :invoice_trashed}
 
       locked ->
         if Invoice.voidable?(locked) do
@@ -4436,6 +4798,8 @@ defmodule PhoenixKitBilling do
   end
 
   defp apply_invoice_filters(query, filters) do
+    query = scope_trashed(query, trashed_option(filters))
+
     Enum.reduce(filters, query, fn
       {:status, status}, q when is_binary(status) ->
         where(q, [i], i.status == ^status)
@@ -4508,7 +4872,7 @@ defmodule PhoenixKitBilling do
   # the row inserted.
   #
   # `field` is the column of the number, which has a unique index.
-  defp insert_numbered(build, scope, prefix, field, source) do
+  defp insert_numbered(build, scope, prefix, field, source, guard \\ fn -> :ok end) do
     case build.(nil) do
       %Ecto.Changeset{valid?: false} = invalid ->
         {:error, %{invalid | action: :insert}}
@@ -4516,28 +4880,35 @@ defmodule PhoenixKitBilling do
       _valid ->
         result =
           repo().transaction(fn ->
-            inserted =
-              case source do
-                :generate ->
-                  insert_with_number(build, scope, prefix, field)
+            # `guard` runs before anything is written or numbered, so a refusal
+            # is a value and leaves a caller's transaction usable.
+            with :ok <- guard.() do
+              inserted =
+                case source do
+                  :generate ->
+                    insert_with_number(build, scope, prefix, field)
 
-                {:supplied, supplied} ->
-                  raise_sequence_floor(scope, prefix, supplied)
-                  build.(supplied) |> repo().insert()
+                  {:supplied, supplied} ->
+                    raise_sequence_floor(scope, prefix, supplied)
+                    build.(supplied) |> repo().insert()
+                end
+
+              case inserted do
+                {:ok, record} -> {:inserted, record}
+                # A run of taken numbers: nothing is wrong with what is inserted,
+                # so the counter keeps the progress it made past them.
+                {:exhausted, changeset} -> {:exhausted, changeset}
+                {:error, changeset} -> repo().rollback(changeset)
               end
-
-            case inserted do
-              {:ok, record} -> {:inserted, record}
-              # A run of taken numbers: nothing is wrong with what is inserted,
-              # so the counter keeps the progress it made past them.
-              {:exhausted, changeset} -> {:exhausted, changeset}
-              {:error, changeset} -> repo().rollback(changeset)
+            else
+              {:error, reason} -> {:refused, reason}
             end
           end)
 
         case result do
           {:ok, {:inserted, record}} -> {:ok, record}
           {:ok, {:exhausted, changeset}} -> {:error, changeset}
+          {:ok, {:refused, reason}} -> {:error, reason}
           {:error, _changeset} = error -> error
         end
     end
@@ -4608,37 +4979,54 @@ defmodule PhoenixKitBilling do
   end
 
   # An update that changes a number (`numbers`: field -> scope) lifts the
-  # counter past it in the same transaction, after `lock` has taken the row; any
-  # other update is a plain one.
-  defp update_numbered(changeset, numbers, lock \\ fn -> :ok end)
+  # counter past it in the same transaction; any other update is a plain one.
+  #
+  # `check:` is a function run inside that transaction, after the counters and
+  # right before the write, that returns `:ok` or `{:error, reason}`. A refusal
+  # is returned as a value, not a rollback, and writes nothing (a counter that
+  # was lifted stays lifted, as it does for any failed update). Giving a `check:`
+  # makes every valid update run in a transaction.
+  defp update_numbered(changeset, numbers, opts \\ [])
 
-  defp update_numbered(%Ecto.Changeset{valid?: true} = changeset, numbers, lock) do
+  defp update_numbered(%Ecto.Changeset{valid?: true} = changeset, numbers, opts) do
     floors =
       for {field, scope} <- numbers,
           number = Map.get(changeset.changes, field),
           is_binary(number),
           do: {scope, number}
 
-    if floors == [] do
+    check = Keyword.get(opts, :check)
+
+    if floors == [] and is_nil(check) do
       repo().update(changeset)
     else
-      repo().transaction(fn ->
-        lock.()
+      result =
+        repo().transaction(fn ->
+          Enum.each(floors, fn {scope, number} ->
+            raise_sequence_floor(scope, number_prefix(scope), number)
+          end)
 
-        Enum.each(floors, fn {scope, number} ->
-          raise_sequence_floor(scope, number_prefix(scope), number)
+          with :ok <- run_check(check),
+               {:ok, record} <- repo().update(changeset) do
+            record
+          else
+            {:error, %Ecto.Changeset{} = changeset} -> repo().rollback(changeset)
+            {:error, reason} -> {:refused, reason}
+          end
         end)
 
-        case repo().update(changeset) do
-          {:ok, record} -> record
-          {:error, changeset} -> repo().rollback(changeset)
-        end
-      end)
+      case result do
+        {:ok, {:refused, reason}} -> {:error, reason}
+        other -> other
+      end
     end
   end
 
-  defp update_numbered(%Ecto.Changeset{} = changeset, _numbers, _lock),
+  defp update_numbered(%Ecto.Changeset{} = changeset, _numbers, _opts),
     do: repo().update(changeset)
+
+  defp run_check(nil), do: :ok
+  defp run_check(check), do: check.()
 
   defp number_prefix("order"), do: Settings.get_setting_cached("billing_order_prefix", "ORD")
   defp number_prefix("invoice"), do: Settings.get_setting_cached("billing_invoice_prefix", "INV")
@@ -5022,6 +5410,9 @@ defmodule PhoenixKitBilling do
   Takes the invoice row lock, then a transaction number, and a receipt number
   when the payment settles the invoice. #{@payment_note}
   """
+  def record_payment(%Invoice{trashed_at: %DateTime{}}, _attrs, _admin_user),
+    do: {:error, :invoice_trashed}
+
   def record_payment(%Invoice{} = invoice, attrs, admin_user) do
     amount = parse_decimal(attrs[:amount] || attrs["amount"])
     remaining = Invoice.remaining_amount(invoice)
@@ -5159,6 +5550,9 @@ defmodule PhoenixKitBilling do
 
   Takes the invoice row lock, then a transaction number. #{@payment_note}
   """
+  def record_refund(%Invoice{trashed_at: %DateTime{}}, _attrs, _admin_user),
+    do: {:error, :invoice_trashed}
+
   def record_refund(%Invoice{} = invoice, attrs, admin_user) do
     amount = parse_decimal(attrs[:amount] || attrs["amount"])
     max_refund = invoice.paid_amount
@@ -5246,6 +5640,10 @@ defmodule PhoenixKitBilling do
   # What the LOCKED invoice allows: see the comments in do_record_transaction/4.
   defp check_transaction_fits(locked, amount) do
     cond do
+      # Trashed since the caller read the invoice: nothing is booked on it.
+      Invoice.trashed?(locked) ->
+        {:error, :invoice_trashed}
+
       Decimal.positive?(amount) and
           Decimal.compare(amount, Invoice.remaining_amount(locked)) == :gt ->
         {:error, :exceeds_remaining}
