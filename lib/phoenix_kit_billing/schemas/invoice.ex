@@ -414,6 +414,12 @@ defmodule PhoenixKitBilling.Invoice do
   def voidable?(_), do: false
 
   @doc """
+  Checks if an invoice still counts against its order: it has not been voided.
+  """
+  def open?(%__MODULE__{status: "void"}), do: false
+  def open?(%__MODULE__{}), do: true
+
+  @doc """
   Checks if invoice has a receipt.
   """
   def has_receipt?(%__MODULE__{receipt_number: nil}), do: false

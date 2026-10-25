@@ -3946,21 +3946,47 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Voids an invoice.
+
+  The trail goes into the invoice's `metadata["void"]` as `"reason"` (trimmed,
+  `nil` when blank), `"by_uuid"` and `"at"`. `notes` is never touched: it is
+  customer-visible and printed on the invoice.
+
+  ## Options
+
+  - `:actor_uuid` - the user who voids the invoice
+
+  Takes a row lock on the invoice for the duration of the call and checks
+  `Invoice.voidable?/1` against the stored row, not the struct's, so a payment
+  committed since the struct was read is not overwritten. Call it inside your
+  own transaction only if holding that lock until commit is fine.
+
+  Returns `{:ok, invoice}` (without the preloads of the struct passed in),
+  `{:error, :invoice_not_voidable}` or `{:error, changeset}`.
   """
-  def void_invoice(%Invoice{} = invoice, reason \\ nil) do
-    if Invoice.voidable?(invoice) do
-      changeset = Invoice.status_changeset(invoice, "void")
+  def void_invoice(%Invoice{} = invoice, reason \\ nil, opts \\ []) do
+    # A transaction so the durable event commits with the void.
+    result =
+      repo().transaction(fn ->
+        # The caller's struct may be minutes old: a payment recorded since
+        # would otherwise be overwritten by the void (status "paid" -> "void"
+        # with the money still in the ledger).
+        locked = lock_invoice_for_update(invoice)
 
-      changeset =
-        if reason do
-          Ecto.Changeset.put_change(changeset, :notes, reason)
-        else
-          changeset
-        end
+        if Invoice.voidable?(locked) do
+          trail = %{
+            "reason" => normalize_reason(reason),
+            "by_uuid" => opts[:actor_uuid],
+            "at" => now_iso()
+          }
 
-      # A transaction so the durable event commits with the void.
-      result =
-        repo().transaction(fn ->
+          changeset =
+            locked
+            |> Invoice.status_changeset("void")
+            |> Ecto.Changeset.put_change(
+              :metadata,
+              Map.put(locked.metadata || %{}, "void", trail)
+            )
+
           case repo().update(changeset) do
             {:ok, voided} ->
               InvoiceEvents.enqueue(:voided, voided)
@@ -3969,20 +3995,31 @@ defmodule PhoenixKitBilling do
             {:error, cs} ->
               repo().rollback(cs)
           end
-        end)
+        else
+          repo().rollback(:invoice_not_voidable)
+        end
+      end)
 
-      case result do
-        {:ok, voided_invoice} ->
-          Events.broadcast_invoice_voided(voided_invoice)
-          {:ok, voided_invoice}
+    case result do
+      {:ok, voided_invoice} ->
+        Events.broadcast_invoice_voided(voided_invoice)
+        {:ok, voided_invoice}
 
-        error ->
-          error
-      end
-    else
-      {:error, :invoice_not_voidable}
+      error ->
+        error
     end
   end
+
+  # A free-text reason as typed in a form: surrounding whitespace is noise and
+  # a blank one means no reason was given.
+  defp normalize_reason(reason) when is_binary(reason) do
+    case String.trim(reason) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_reason(_), do: nil
 
   @doc """
   Generates a receipt for an invoice.

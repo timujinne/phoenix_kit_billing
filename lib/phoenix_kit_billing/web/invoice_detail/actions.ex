@@ -351,7 +351,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
 
         {:noreply,
          socket
-         |> Phoenix.Component.assign(:invoice, invoice)
+         |> reload_invoice()
          |> put_flash(:info, "Invoice voided")}
 
       {:error, reason} ->
