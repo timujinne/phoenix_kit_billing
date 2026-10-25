@@ -78,7 +78,7 @@ defmodule PhoenixKit.Modules.Billing do
   defdelegate update_order(order, attrs), to: PhoenixKitBilling
   defdelegate delete_order(order), to: PhoenixKitBilling
   defdelegate confirm_order(order), to: PhoenixKitBilling
-  defdelegate cancel_order(order, reason \\ nil), to: PhoenixKitBilling
+  defdelegate cancel_order(order, reason \\ nil, opts \\ []), to: PhoenixKitBilling
   defdelegate mark_order_paid(order, opts \\ []), to: PhoenixKitBilling
   defdelegate mark_order_refunded(order), to: PhoenixKitBilling
 
@@ -95,7 +95,7 @@ defmodule PhoenixKit.Modules.Billing do
   defdelegate create_invoice_from_order(order, opts \\ []), to: PhoenixKitBilling
   defdelegate update_invoice(invoice, attrs), to: PhoenixKitBilling
   defdelegate send_invoice(invoice, opts \\ []), to: PhoenixKitBilling
-  defdelegate void_invoice(invoice, reason \\ nil), to: PhoenixKitBilling
+  defdelegate void_invoice(invoice, reason \\ nil, opts \\ []), to: PhoenixKitBilling
   defdelegate mark_invoice_paid(invoice), to: PhoenixKitBilling
   defdelegate update_invoice_paid_amount(invoice), to: PhoenixKitBilling
   defdelegate calculate_invoice_paid_amount(invoice_uuid), to: PhoenixKitBilling

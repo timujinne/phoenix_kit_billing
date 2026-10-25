@@ -227,6 +227,7 @@ defmodule PhoenixKitBilling.Order do
       :paid_at,
       :cancelled_at
     ])
+    |> refuse_cancellation()
     |> validate_required([:total, :currency])
     |> validate_guest_order_billing()
     |> validate_inclusion(:status, @valid_statuses)
@@ -247,6 +248,21 @@ defmodule PhoenixKitBilling.Order do
       name: :fk_orders_billing_profile_uuid
     )
   end
+
+  # Cancelling a stored order goes through `PhoenixKitBilling.cancel_order/3`,
+  # which writes the reason and the cancellation trail an integration reads. A
+  # form or a crafted submit that sets the status here would cancel without it.
+  defp refuse_cancellation(%Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset) do
+    changeset = delete_change(changeset, :cancelled_at)
+
+    if get_change(changeset, :status) == "cancelled" do
+      add_error(changeset, :status, "orders are cancelled with cancel_order/3")
+    else
+      changeset
+    end
+  end
+
+  defp refuse_cancellation(changeset), do: changeset
 
   # Guest orders must have billing_snapshot with email when no billing_profile_uuid
   defp validate_guest_order_billing(changeset) do
@@ -292,6 +308,27 @@ defmodule PhoenixKitBilling.Order do
       _ ->
         changeset
     end
+  end
+
+  @doc """
+  Changeset that cancels an order and records the cancellation trail:
+  `metadata["cancelled_from"]` (the status the order had) and
+  `metadata["cancelled_by_uuid"]` (`nil` when nobody is named).
+
+  These two keys are written here and nowhere else: `changeset/2` drops them
+  from its input and keeps the stored values.
+  """
+  def cancel_changeset(order, actor_uuid) do
+    trail = %{"cancelled_from" => order.status, "cancelled_by_uuid" => actor_uuid}
+
+    order
+    |> status_changeset("cancelled")
+    # After `bump_revision/1` (registered by `status_changeset/2`), which keeps
+    # the stored trail: this replaces it with the cancellation's own.
+    |> prepare_changes(fn changeset ->
+      metadata = get_field(changeset, :metadata) || %{}
+      put_change(changeset, :metadata, Map.merge(metadata, trail))
+    end)
   end
 
   defp validate_status_transition(changeset, from, to) do
@@ -360,6 +397,9 @@ defmodule PhoenixKitBilling.Order do
 
   # Metadata keys billing owns: no changeset can set, replace or drop them.
   @owned_metadata_keys ~w(revision sync)
+
+  # Written only by `cancel_changeset/2`; kept as stored by every other change.
+  @cancel_metadata_keys ~w(cancelled_from cancelled_by_uuid)
 
   # What an external system reads of an order. `internal_notes` and the frozen
   # `base_*` figures are not among them.
@@ -473,7 +513,12 @@ defmodule PhoenixKitBilling.Order do
   # count. Whatever the attrs say, `sync` and `revision` stay as stored.
   defp track_revision(%Ecto.Changeset{data: %{__meta__: %{state: :built}}} = changeset) do
     metadata = get_field(changeset, :metadata) || %{}
-    put_change(changeset, :metadata, metadata |> Map.delete("sync") |> Map.put("revision", 1))
+
+    put_change(
+      changeset,
+      :metadata,
+      metadata |> Map.drop(["sync" | @cancel_metadata_keys]) |> Map.put("revision", 1)
+    )
   end
 
   defp track_revision(%Ecto.Changeset{} = changeset) do
@@ -487,13 +532,10 @@ defmodule PhoenixKitBilling.Order do
   defp keep_owned_metadata(changeset) do
     case fetch_change(changeset, :metadata) do
       {:ok, %{} = metadata} ->
-        owned = Map.take(changeset.data.metadata || %{}, @owned_metadata_keys)
+        kept = @owned_metadata_keys ++ @cancel_metadata_keys
+        owned = Map.take(changeset.data.metadata || %{}, kept)
 
-        put_change(
-          changeset,
-          :metadata,
-          metadata |> Map.drop(@owned_metadata_keys) |> Map.merge(owned)
-        )
+        put_change(changeset, :metadata, metadata |> Map.drop(kept) |> Map.merge(owned))
 
       _ ->
         changeset
@@ -526,9 +568,16 @@ defmodule PhoenixKitBilling.Order do
         _ -> stored
       end
 
-    owned = stored |> Map.take(["sync"]) |> Map.put("revision", revision_of(stored) + 1)
+    owned =
+      stored
+      |> Map.take(["sync" | @cancel_metadata_keys])
+      |> Map.put("revision", revision_of(stored) + 1)
 
-    put_change(changeset, :metadata, base |> Map.drop(@owned_metadata_keys) |> Map.merge(owned))
+    put_change(
+      changeset,
+      :metadata,
+      base |> Map.drop(@owned_metadata_keys ++ @cancel_metadata_keys) |> Map.merge(owned)
+    )
   end
 
   @doc """

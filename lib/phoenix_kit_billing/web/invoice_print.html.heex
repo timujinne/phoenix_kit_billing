@@ -103,6 +103,25 @@
       .status-void { background: #fee2e2; color: #b91c1c; }
       .status-overdue { background: #fee2e2; color: #b91c1c; }
 
+      .void-banner {
+        padding: 16px 40px;
+        background: #fee2e2;
+        color: #b91c1c;
+        border-bottom: 2px solid #b91c1c;
+      }
+
+      .void-banner .void-mark {
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 6px;
+        text-transform: uppercase;
+      }
+
+      .void-banner p {
+        margin-top: 4px;
+        white-space: pre-wrap;
+      }
+
       .invoice-body {
         padding: 40px;
       }
@@ -396,6 +415,7 @@
         .status-paid,
         .status-void,
         .status-overdue,
+        .void-banner,
         .due-date-box,
         .bank-details-box,
         .receipt-badge,
@@ -426,6 +446,16 @@
           {status_label(@invoice.status)}
         </div>
       </div>
+
+      <%!-- The reason is an internal note: a printout can reach the customer. --%>
+      <%= if @invoice.status == "void" do %>
+        <div id="invoice-void-mark" class="void-banner">
+          <div class="void-mark">{gettext("VOID")}</div>
+          <%= if @invoice.voided_at do %>
+            <p>{gettext("Voided on %{date}", date: format_date(@invoice.voided_at))}</p>
+          <% end %>
+        </div>
+      <% end %>
 
       <div class="invoice-body">
         <div class="invoice-meta">

@@ -110,6 +110,9 @@ defmodule PhoenixKitBilling.ErrorsTest do
             "This invoice cannot be sent in its current state."
         )
 
+    test ":invoice_not_void",
+      do: assert(Errors.message(:invoice_not_void) == "This invoice has not been voided.")
+
     test ":invoice_not_voidable",
       do:
         assert(
@@ -176,6 +179,13 @@ defmodule PhoenixKitBilling.ErrorsTest do
 
     test ":not_supported",
       do: assert(Errors.message(:not_supported) == "This operation is not supported.")
+
+    test ":order_has_invoices",
+      do:
+        assert(
+          Errors.message(:order_has_invoices) ==
+            "This order has invoices and cannot be deleted."
+        )
 
     test ":order_not_cancellable",
       do:

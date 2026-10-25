@@ -210,7 +210,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
       {:ok, order} = create_basic_order(user)
       assert {:ok, cancelled} = Billing.cancel_order(order, "changed mind")
       assert cancelled.status == "cancelled"
-      assert cancelled.internal_notes == "changed mind"
+      assert cancelled.internal_notes =~ ~r/\ACancelled .* UTC: changed mind\z/
     end
 
     test "delete_order/1 only deletes drafts", %{user: user} do

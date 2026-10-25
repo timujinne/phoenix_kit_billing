@@ -22,6 +22,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.Activity
+  alias PhoenixKitBilling.Errors
   alias PhoenixKitBilling.Events
   alias PhoenixKitBilling.Web.Trail
 
@@ -66,6 +67,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
             |> assign(:invoices, order.invoices)
             |> assign(:show_status_modal, false)
             |> assign(:show_invoice_modal, false)
+            |> assign(:show_cancel_modal, false)
           end
 
         {:noreply, socket}
@@ -160,26 +162,48 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   end
 
   @impl true
-  def handle_event("cancel_order", _params, socket) do
+  def handle_event("open_cancel_modal", _params, socket) do
+    {:noreply, assign(socket, :show_cancel_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_cancel_modal", _params, socket) do
+    {:noreply, assign(socket, :show_cancel_modal, false)}
+  end
+
+  @impl true
+  def handle_event("cancel_order", params, socket) do
     Authz.authorize(socket, :manage_orders, fn ->
-      case Billing.cancel_order(socket.assigns.order) do
+      actor_uuid = Activity.actor_uuid(socket)
+
+      case Billing.cancel_order(socket.assigns.order, params["reason"], actor_uuid: actor_uuid) do
         {:ok, order} ->
           Activity.log("billing.order_cancelled",
-            actor_uuid: Activity.actor_uuid(socket),
+            actor_uuid: actor_uuid,
             actor_role: Activity.actor_role(socket),
             resource_type: "order",
             resource_uuid: order.uuid,
-            metadata: %{"order_number" => order.order_number, "status" => order.status}
+            # The operator's own reason, typed for the audit trail (not customer data).
+            metadata:
+              %{"order_number" => order.order_number, "status" => order.status}
+              |> put_reason(params["reason"])
           )
 
           {:noreply,
            socket
            |> assign(:order, order)
+           |> assign(:show_cancel_modal, false)
            |> put_flash(:info, gettext("Order cancelled"))}
 
         {:error, reason} ->
           {:noreply,
-           put_flash(socket, :error, gettext("Failed to cancel order: %{reason}", reason: reason))}
+           socket
+           |> refresh_order()
+           |> assign(:show_cancel_modal, false)
+           |> put_flash(
+             :error,
+             gettext("Failed to cancel order: %{reason}", reason: Errors.message(reason))
+           )}
       end
     end)
   end
@@ -237,5 +261,12 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
       end)
     end)
     |> Enum.map_join("; ", fn {k, v} -> "#{k}: #{Enum.join(v, ", ")}" end)
+  end
+
+  defp put_reason(metadata, reason) do
+    case Billing.normalize_reason(reason) do
+      nil -> metadata
+      reason -> Map.put(metadata, "reason", reason)
+    end
   end
 end

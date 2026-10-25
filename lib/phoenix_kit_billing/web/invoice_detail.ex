@@ -79,6 +79,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
             |> assign(:checkout_loading, nil)
             |> assign(:show_payment_modal, false)
             |> assign(:show_refund_modal, false)
+            |> assign(:show_void_modal, false)
             |> assign(:show_send_modal, false)
             |> assign(:show_send_receipt_modal, false)
             |> assign(:show_send_credit_note_modal, false)
@@ -168,6 +169,16 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   @impl true
   def handle_event("close_refund_modal", _params, socket) do
     {:noreply, assign(socket, :show_refund_modal, false)}
+  end
+
+  @impl true
+  def handle_event("open_void_modal", _params, socket) do
+    {:noreply, assign(socket, :show_void_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_void_modal", _params, socket) do
+    {:noreply, assign(socket, :show_void_modal, false)}
   end
 
   @impl true
@@ -378,7 +389,8 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail do
   defp gated_event("send_payment_confirmation", _params, socket),
     do: Actions.send_payment_confirmation(socket)
 
-  defp gated_event("void_invoice", _params, socket), do: Actions.void_invoice(socket)
+  defp gated_event("void_invoice", params, socket),
+    do: Actions.void_invoice(socket, params["reason"])
 
   defp gated_event("generate_receipt", _params, socket), do: Actions.generate_receipt(socket)
 end
