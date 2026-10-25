@@ -16,6 +16,18 @@ defmodule PhoenixKitBilling.MigrationsAdoptionTest do
   # V7's counter table is the one thing a rollback below V7 drops.
   defp v7_drop, do: ["DROP TABLE IF EXISTS public.phoenix_kit_billing_number_sequences"]
 
+  # V8's trash columns and indexes go on the way down too.
+  defp v8_drop do
+    for table <- ~w(orders invoices),
+        stmt <- [
+          "DROP INDEX IF EXISTS public.phoenix_kit_#{table}_not_trashed_idx",
+          "DROP INDEX IF EXISTS public.phoenix_kit_#{table}_trashed_idx",
+          "ALTER TABLE public.phoenix_kit_#{table} DROP COLUMN IF EXISTS trashed_at",
+          "ALTER TABLE public.phoenix_kit_#{table} DROP COLUMN IF EXISTS trashed_by_uuid"
+        ],
+        do: stmt
+  end
+
   describe "the order of the statements" do
     test "the base tables come before the first statement that touches them" do
       statements = Migrations.up_statements("public")
@@ -47,7 +59,7 @@ defmodule PhoenixKitBilling.MigrationsAdoptionTest do
     end
 
     test "down from V6 only rewrites the marker" do
-      assert [marker] = Migrations.down_statements("public", 5) -- v7_drop()
+      assert [marker] = (Migrations.down_statements("public", 5) -- v7_drop()) -- v8_drop()
       assert marker =~ "pkb_schema:5"
     end
   end

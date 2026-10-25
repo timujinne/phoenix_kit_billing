@@ -255,6 +255,29 @@ defmodule PhoenixKitBilling.Migrations do
   `down/1` below V7 drops it. A later `up/1` then reseeds from the rows that
   survive, so the numbers of deleted top rows can come back.
 
+  ## V8 - a trash for orders and invoices
+
+  Orders and draft invoices can be moved to a trash and restored, instead of
+  being deleted. `phoenix_kit_orders` and `phoenix_kit_invoices` (both
+  core-created, adopted by V4) each get:
+
+    * `trashed_at timestamp with time zone` - `NULL` for a row that is not in
+      the trash, the moment it was moved there otherwise;
+    * `trashed_by_uuid uuid` - the user who did it, `NULL` when nobody is named.
+      No foreign key, like the other actor references this chain keeps: a user
+      who is removed later must not block or rewrite the trash's history;
+    * two partial indexes per table: `..._not_trashed_idx` on `(inserted_at)
+      WHERE trashed_at IS NULL`, which the default listing reads, and
+      `..._trashed_idx` on `(trashed_at) WHERE trashed_at IS NOT NULL`, which
+      the trash listing reads and which stays as small as the trash.
+
+  Nothing is rewritten: every existing row reads as "not trashed". The code
+  that writes the columns needs them, so run V8 before it.
+
+  `down/1` below V8 drops the four indexes and the four columns - never either
+  table. Rows that were in the trash are not deleted; they simply read as not
+  trashed again, so they reappear in the lists.
+
   Locks. A create holds its counter row until its transaction ends. Take them
   in this order, everywhere: order counter, invoice counter, invoice row,
   transaction counter, receipt counter, order row (`FOR NO KEY UPDATE`). (An
@@ -270,7 +293,7 @@ defmodule PhoenixKitBilling.Migrations do
 
   use Ecto.Migration
 
-  @current_version 7
+  @current_version 8
   @marker_prefix "pkb_schema:"
   @version_table "phoenix_kit_payment_provider_configs"
 
@@ -353,7 +376,8 @@ defmodule PhoenixKitBilling.Migrations do
   `rounding_rule`, `rate_updated_at`); `3` additionally adds
   `phoenix_kit_orders`' frozen-currency columns; `4` additionally adopts
   the remaining ten core-baseline tables (see the moduledoc); `7`
-  additionally creates the number sequences table.
+  additionally creates the number sequences table; `8` additionally adds the
+  trash columns and partial indexes to orders and invoices.
   """
   @spec up_statements(String.t(), non_neg_integer()) :: [String.t()]
   def up_statements(prefix \\ "public", target \\ @current_version)
@@ -464,12 +488,15 @@ defmodule PhoenixKitBilling.Migrations do
 
       v7 = if target >= 7, do: v7_statements(p), else: []
 
+      v8 = if target >= 8, do: v8_statements(p), else: []
+
       v1 ++
         v6 ++
         v2 ++
         v3 ++
         v4 ++
-        v5 ++ v7 ++ ["COMMENT ON TABLE #{p}#{@version_table} IS '#{@marker_prefix}#{target}'"]
+        v5 ++
+        v7 ++ v8 ++ ["COMMENT ON TABLE #{p}#{@version_table} IS '#{@marker_prefix}#{target}'"]
     end
   end
 
@@ -528,6 +555,31 @@ defmodule PhoenixKitBilling.Migrations do
       )
       """
     ]
+  end
+
+  # V8 - the trash columns and their partial indexes on the two tables that have
+  # a trash (see the moduledoc). Every statement is `IF NOT EXISTS`, so a replay
+  # changes nothing and never touches a row.
+  defp v8_statements(p) do
+    tables = ~w(phoenix_kit_orders phoenix_kit_invoices)
+
+    columns =
+      for table <- tables,
+          stmt <- [
+            "ALTER TABLE #{p}#{table} ADD COLUMN IF NOT EXISTS trashed_at timestamp with time zone",
+            "ALTER TABLE #{p}#{table} ADD COLUMN IF NOT EXISTS trashed_by_uuid uuid"
+          ],
+          do: stmt
+
+    indexes =
+      for table <- tables,
+          stmt <- [
+            "CREATE INDEX IF NOT EXISTS #{table}_not_trashed_idx ON #{p}#{table} USING btree (inserted_at) WHERE trashed_at IS NULL",
+            "CREATE INDEX IF NOT EXISTS #{table}_trashed_idx ON #{p}#{table} USING btree (trashed_at) WHERE trashed_at IS NOT NULL"
+          ],
+          do: stmt
+
+    columns ++ indexes
   end
 
   # V5 — a payer need not have an account (see the moduledoc). Each step is
@@ -1260,7 +1312,9 @@ defmodule PhoenixKitBilling.Migrations do
   `phoenix_kit_payment_provider_configs` table itself. V4 changes no
   shape of its own (pure adoption, like V1), so there is nothing below V4
   to drop beyond the marker. Below V7 the V7 counter table is dropped — the
-  only table here that this chain, not core, created.
+  only table here that this chain, not core, created. Below V8 the trash
+  columns and partial indexes of orders and invoices are dropped, never the
+  tables.
   """
   @spec down_statements(String.t(), non_neg_integer()) :: [String.t()]
   def down_statements(prefix \\ "public", target \\ 0)
@@ -1330,7 +1384,23 @@ defmodule PhoenixKitBilling.Migrations do
         []
       end
 
-    drop_v7 ++ drop_v5 ++ drop_v3 ++ drop_v2 ++ [marker]
+    # The trash's columns and indexes, on two core-created tables: dropped, the
+    # tables and their rows stay.
+    drop_v8 =
+      if target < 8 do
+        for table <- ~w(phoenix_kit_orders phoenix_kit_invoices),
+            stmt <- [
+              "DROP INDEX IF EXISTS #{p}#{table}_not_trashed_idx",
+              "DROP INDEX IF EXISTS #{p}#{table}_trashed_idx",
+              "ALTER TABLE #{p}#{table} DROP COLUMN IF EXISTS trashed_at",
+              "ALTER TABLE #{p}#{table} DROP COLUMN IF EXISTS trashed_by_uuid"
+            ],
+            do: stmt
+      else
+        []
+      end
+
+    drop_v8 ++ drop_v7 ++ drop_v5 ++ drop_v3 ++ drop_v2 ++ [marker]
   end
 
   defp parse_version(n) do

@@ -42,7 +42,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     alias PhoenixKit.Migrations.Postgres.Helpers
 
     test "current_version/0 and version_table/0" do
-      assert Migrations.current_version() == 7
+      assert Migrations.current_version() == 8
       assert Migrations.version_table() == "phoenix_kit_payment_provider_configs"
     end
 
@@ -192,6 +192,33 @@ defmodule PhoenixKitBilling.MigrationsTest do
       refute Migrations.up_statements("public", 6) |> Enum.any?(&(&1 =~ "number_sequences"))
     end
 
+    test "V8 adds the trash columns and their partial indexes to orders and invoices" do
+      v8_only =
+        (Migrations.up_statements("public", 8) -- Migrations.up_statements("public", 7))
+        |> normalised()
+
+      assert v8_only == [
+               "ALTER TABLE public.phoenix_kit_orders ADD COLUMN IF NOT EXISTS trashed_at timestamp with time zone",
+               "ALTER TABLE public.phoenix_kit_orders ADD COLUMN IF NOT EXISTS trashed_by_uuid uuid",
+               "ALTER TABLE public.phoenix_kit_invoices ADD COLUMN IF NOT EXISTS trashed_at timestamp with time zone",
+               "ALTER TABLE public.phoenix_kit_invoices ADD COLUMN IF NOT EXISTS trashed_by_uuid uuid",
+               "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_not_trashed_idx ON public.phoenix_kit_orders USING btree (inserted_at) WHERE trashed_at IS NULL",
+               "CREATE INDEX IF NOT EXISTS phoenix_kit_orders_trashed_idx ON public.phoenix_kit_orders USING btree (trashed_at) WHERE trashed_at IS NOT NULL",
+               "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_not_trashed_idx ON public.phoenix_kit_invoices USING btree (inserted_at) WHERE trashed_at IS NULL",
+               "CREATE INDEX IF NOT EXISTS phoenix_kit_invoices_trashed_idx ON public.phoenix_kit_invoices USING btree (trashed_at) WHERE trashed_at IS NOT NULL",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:8'"
+             ]
+
+      assert Migrations.up_statements("billing_alt", 8)
+             |> Enum.any?(
+               &(&1 =~
+                   "ALTER TABLE billing_alt.phoenix_kit_invoices ADD COLUMN IF NOT EXISTS trashed_at")
+             )
+
+      # A target below 8 builds the chain as it was.
+      refute Migrations.up_statements("public", 7) |> Enum.any?(&(&1 =~ "trashed"))
+    end
+
     # V4 is NOT yet published — nothing has shipped that could be split
     # from a fresh install by editing it, so the stakes here are "catch an
     # accidental edit while working on something else", not "protect a
@@ -240,7 +267,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
       statements = Migrations.up_statements()
 
       assert List.last(statements) ==
-               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:8'",
              "the marker must be stamped after the DDL it certifies, not before"
     end
 
@@ -333,6 +360,11 @@ defmodule PhoenixKitBilling.MigrationsTest do
       v7_drop_public = ["DROP TABLE IF EXISTS public.phoenix_kit_billing_number_sequences"]
       v7_drop_alt = ["DROP TABLE IF EXISTS billing_alt.phoenix_kit_billing_number_sequences"]
 
+      # V8 added columns and partial indexes to two core-created tables; the
+      # way down drops exactly those, never the tables.
+      v8_drop_public = v8_drop("public")
+      v8_drop_alt = v8_drop("billing_alt")
+
       v3_drops_public = [
         "ALTER TABLE public.phoenix_kit_orders DROP COLUMN IF EXISTS base_currency",
         "ALTER TABLE public.phoenix_kit_orders DROP COLUMN IF EXISTS exchange_rate",
@@ -358,14 +390,16 @@ defmodule PhoenixKitBilling.MigrationsTest do
       ]
 
       assert Migrations.down_statements("public", 0) ==
-               v7_drop_public ++
+               v8_drop_public ++
+                 v7_drop_public ++
                  v5_undo_public ++
                  v3_drops_public ++
                  v2_drops_public ++
                  ["COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS NULL"]
 
       assert Migrations.down_statements("public", 1) ==
-               v7_drop_public ++
+               v8_drop_public ++
+                 v7_drop_public ++
                  v5_undo_public ++
                  v3_drops_public ++
                  v2_drops_public ++
@@ -374,7 +408,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
                  ]
 
       assert Migrations.down_statements("billing_alt", 0) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  v5_undo_alt ++
                  v3_drops_alt ++
                  v2_drops_alt ++
@@ -383,7 +418,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
       # target 2: below V3, so the orders columns still get dropped, but
       # the currencies index/columns (added at V2, kept at target >= 2) do not.
       assert Migrations.down_statements("billing_alt", 2) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  v5_undo_alt ++
                  v3_drops_alt ++
                  [
@@ -392,7 +428,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
       # target 3: V3's own additions are kept; only V5 is undone.
       assert Migrations.down_statements("billing_alt", 3) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  v5_undo_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:3'"
@@ -401,7 +438,8 @@ defmodule PhoenixKitBilling.MigrationsTest do
       # target 4: V5 undone. V4 itself is pure adoption (like V1) — it
       # changes no shape of its own, so it contributes nothing to drop.
       assert Migrations.down_statements("billing_alt", 4) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  v5_undo_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:4'"
@@ -410,23 +448,47 @@ defmodule PhoenixKitBilling.MigrationsTest do
       # target 5: V6 undone — it adopted tables, so nothing of its own to drop;
       # V7's table still goes.
       assert Migrations.down_statements("billing_alt", 5) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:5'"
                  ]
 
-      # target 6: only V7 undone.
+      # target 6: V7 and V8 undone.
       assert Migrations.down_statements("billing_alt", 6) ==
-               v7_drop_alt ++
+               v8_drop_alt ++
+                 v7_drop_alt ++
                  [
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'"
                  ]
 
-      # target 7 == current_version: nothing to undo, marker only.
+      # target 7: only V8 undone; V7's counter table stays.
       assert Migrations.down_statements("billing_alt", 7) ==
+               v8_drop_alt ++
+                 [
+                   "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'"
+                 ]
+
+      # target 8 == current_version: nothing to undo, marker only.
+      assert Migrations.down_statements("billing_alt", 8) ==
                [
-                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:7'"
+                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:8'"
                ]
+    end
+
+    # V8's rollback, pinned verbatim: the partial indexes, then the two columns
+    # on each table - never a table.
+    defp v8_drop(schema) do
+      [
+        "DROP INDEX IF EXISTS #{schema}.phoenix_kit_orders_not_trashed_idx",
+        "DROP INDEX IF EXISTS #{schema}.phoenix_kit_orders_trashed_idx",
+        "ALTER TABLE #{schema}.phoenix_kit_orders DROP COLUMN IF EXISTS trashed_at",
+        "ALTER TABLE #{schema}.phoenix_kit_orders DROP COLUMN IF EXISTS trashed_by_uuid",
+        "DROP INDEX IF EXISTS #{schema}.phoenix_kit_invoices_not_trashed_idx",
+        "DROP INDEX IF EXISTS #{schema}.phoenix_kit_invoices_trashed_idx",
+        "ALTER TABLE #{schema}.phoenix_kit_invoices DROP COLUMN IF EXISTS trashed_at",
+        "ALTER TABLE #{schema}.phoenix_kit_invoices DROP COLUMN IF EXISTS trashed_by_uuid"
+      ]
     end
 
     # V5's rollback, pinned verbatim — the drift guard's job is to make any
@@ -627,7 +689,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
                  "up_statements(#{inspect(prefix)}) contains: #{stmt}"
         end
 
-        for target <- 0..6 do
+        for target <- 0..7 do
           # The one table this chain creates itself (V7) is dropped on the way
           # down; that exact statement is pinned above, so it is the only one
           # let through here.
