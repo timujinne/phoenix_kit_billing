@@ -62,7 +62,7 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
       refute has_element?(view, "#void-invoice-button[data-confirm]")
 
       view |> element("#void-invoice-button") |> render_click()
-      assert has_element?(view, "#void-invoice-modal #void-invoice-form textarea[name=reason]")
+      assert has_element?(view, "#void-invoice-form textarea[name=reason][maxlength='500']")
 
       view |> form("#void-invoice-form", %{"reason" => "Booking cancelled"}) |> render_submit()
 
@@ -192,7 +192,7 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
       refute has_element?(view, "#cancel-order-button[data-confirm]")
 
       view |> element("#cancel-order-button") |> render_click()
-      assert has_element?(view, "#cancel-order-modal #cancel-order-form textarea[name=reason]")
+      assert has_element?(view, "#cancel-order-form textarea[name=reason][maxlength='500']")
 
       view |> form("#cancel-order-form", %{"reason" => "Changed mind"}) |> render_submit()
 

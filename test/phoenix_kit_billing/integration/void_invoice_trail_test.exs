@@ -80,6 +80,14 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       assert voided.metadata["void"]["reason"] == nil
     end
 
+    test "a reason longer than the form allows is cut", %{user: user} do
+      invoice = sent_invoice(user)
+      max = Billing.reason_max_length()
+
+      assert {:ok, voided} = Billing.void_invoice(invoice, String.duplicate("é", max + 100))
+      assert String.length(voided.metadata["void"]["reason"]) == max
+    end
+
     test "a paid invoice is not voidable", %{user: user} do
       invoice = sent_invoice(user)
       {:ok, paid} = Billing.mark_invoice_paid(invoice)

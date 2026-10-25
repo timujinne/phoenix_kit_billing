@@ -71,6 +71,15 @@ defmodule PhoenixKitBilling.Integration.CancelOrderTest do
       assert cancelled.internal_notes == nil
     end
 
+    test "a reason longer than the form allows is cut", %{user: user} do
+      {:ok, order} = create_order(user)
+      max = Billing.reason_max_length()
+
+      assert {:ok, cancelled} = Billing.cancel_order(order, String.duplicate("é", max + 100))
+      [_, reason] = String.split(cancelled.internal_notes, "UTC: ")
+      assert String.length(reason) == max
+    end
+
     test "remembers the status the order was cancelled from", %{user: user} do
       {:ok, draft} = create_order(user)
       assert {:ok, cancelled} = Billing.cancel_order(draft)

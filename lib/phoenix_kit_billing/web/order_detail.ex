@@ -263,12 +263,10 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
     |> Enum.map_join("; ", fn {k, v} -> "#{k}: #{Enum.join(v, ", ")}" end)
   end
 
-  defp put_reason(metadata, reason) when is_binary(reason) do
-    case String.trim(reason) do
-      "" -> metadata
-      trimmed -> Map.put(metadata, "reason", trimmed)
+  defp put_reason(metadata, reason) do
+    case Billing.normalize_reason(reason) do
+      nil -> metadata
+      reason -> Map.put(metadata, "reason", reason)
     end
   end
-
-  defp put_reason(metadata, _reason), do: metadata
 end

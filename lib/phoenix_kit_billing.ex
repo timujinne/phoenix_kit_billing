@@ -4137,16 +4137,22 @@ defmodule PhoenixKitBilling do
   defp charge_amount(nil), do: nil
   defp charge_amount(amount), do: to_string(amount)
 
-  # A free-text reason as typed in a form: surrounding whitespace is noise and
-  # a blank one means no reason was given.
-  defp normalize_reason(reason) when is_binary(reason) do
+  @reason_max_length 500
+
+  @doc "The longest reason `void_invoice/3` and `cancel_order/3` keep; longer ones are cut."
+  def reason_max_length, do: @reason_max_length
+
+  @doc false
+  # A free-text reason as typed in a form: surrounding whitespace is noise, a
+  # blank one means no reason was given, and a runaway one is cut.
+  def normalize_reason(reason) when is_binary(reason) do
     case String.trim(reason) do
       "" -> nil
-      trimmed -> trimmed
+      trimmed -> String.slice(trimmed, 0, @reason_max_length)
     end
   end
 
-  defp normalize_reason(_), do: nil
+  def normalize_reason(_), do: nil
 
   @doc """
   Generates a receipt for an invoice.
