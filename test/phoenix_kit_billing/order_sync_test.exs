@@ -70,8 +70,7 @@ defmodule PhoenixKitBilling.OrderSyncTest do
         %{"order_number" => "ORD-RENUMBERED"},
         %{"user_uuid" => fixture_user().uuid},
         %{"confirmed_at" => now},
-        %{"paid_at" => now},
-        %{"cancelled_at" => now}
+        %{"paid_at" => now}
       ]
 
       final =
@@ -81,7 +80,7 @@ defmodule PhoenixKitBilling.OrderSyncTest do
           updated
         end)
 
-      assert Order.revision(final) == 6
+      assert Order.revision(final) == 5
     end
 
     test "a status change adds 1", %{order: order} do

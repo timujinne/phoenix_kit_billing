@@ -2508,12 +2508,8 @@ defmodule PhoenixKitBilling do
       transition_order(order, fn current ->
         if Order.cancellable?(current) do
           current
-          |> Order.status_changeset("cancelled")
+          |> Order.cancel_changeset(opts[:actor_uuid])
           |> put_cancel_note(current.internal_notes, normalize_reason(reason))
-          |> Ecto.Changeset.put_change(
-            :metadata,
-            cancel_metadata(current.metadata, current.status, opts[:actor_uuid])
-          )
           |> repo().update()
         else
           {:error, :order_not_cancellable}
@@ -2542,14 +2538,6 @@ defmodule PhoenixKitBilling do
       end
 
     Ecto.Changeset.put_change(changeset, :internal_notes, note)
-  end
-
-  defp cancel_metadata(metadata, from_status, actor_uuid) do
-    (metadata || %{})
-    |> Map.put("cancelled_from", from_status)
-    |> then(fn metadata ->
-      if actor_uuid, do: Map.put(metadata, "cancelled_by_uuid", actor_uuid), else: metadata
-    end)
   end
 
   # Runs a status transition against the order's CURRENT status. The guards

@@ -7,7 +7,6 @@ defmodule PhoenixKitBilling.Integration.CancelOrderTest do
   use PhoenixKitBilling.DataCase, async: true
 
   alias PhoenixKitBilling, as: Billing
-  alias PhoenixKitBilling.Order
 
   setup do
     {:ok, user: fixture_user()}
