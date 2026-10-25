@@ -308,6 +308,38 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
     end
   end
 
+  describe "a forged form submit" do
+    test "cannot trash an order through the order form", %{conn: conn, user: user} do
+      order = order(user)
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}/edit")
+
+      render_hook(view, "save", %{
+        "order" => %{
+          "notes" => "edited",
+          "trashed_at" => "2026-01-01T00:00:00Z",
+          "trashed_by_uuid" => user.uuid
+        }
+      })
+
+      stored = Billing.get_order!(order.uuid)
+      assert stored.notes == "edited"
+      refute Order.trashed?(stored)
+      assert stored.trashed_by_uuid == nil
+    end
+
+    test "cannot lift a trashed order out of the trash through the order form", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, trashed} = Billing.trash_order(order(user))
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{trashed.uuid}/edit")
+
+      render_hook(view, "save", %{"order" => %{"trashed_at" => nil, "trashed_by_uuid" => nil}})
+
+      assert Order.trashed?(Billing.get_order!(trashed.uuid))
+    end
+  end
+
   describe "order detail: the invoices shown" do
     test "an invoice in the trash is not listed on its order", %{conn: conn, user: user} do
       order = order(user)

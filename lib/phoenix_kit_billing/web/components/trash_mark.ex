@@ -7,6 +7,8 @@ defmodule PhoenixKitBilling.Web.Components.TrashMark do
   use Phoenix.Component
   use Gettext, backend: PhoenixKitBilling.Gettext
 
+  alias PhoenixKit.Users.Auth
+
   import PhoenixKitWeb.Components.Core.Icon
   import PhoenixKitWeb.Components.Core.TimeDisplay
 
@@ -52,6 +54,7 @@ defmodule PhoenixKitBilling.Web.Components.TrashMark do
   @doc """
   The emails of the users who trashed `records` (anything with a
   `trashed_by_uuid`), by user uuid. A user who is gone, or nobody, is absent.
+  One lookup per distinct user: a page of the trash has a handful.
   """
   @spec trashed_by_emails([map()]) :: %{String.t() => String.t()}
   def trashed_by_emails(records) do
@@ -59,7 +62,8 @@ defmodule PhoenixKitBilling.Web.Components.TrashMark do
     |> Enum.map(& &1.trashed_by_uuid)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
-    |> PhoenixKit.Users.Auth.get_users_by_uuids()
+    |> Enum.map(fn uuid -> Auth.get_user(uuid) end)
+    |> Enum.reject(&is_nil/1)
     |> Map.new(&{&1.uuid, &1.email})
   end
 

@@ -4882,25 +4882,8 @@ defmodule PhoenixKitBilling do
           repo().transaction(fn ->
             # `guard` runs before anything is written or numbered, so a refusal
             # is a value and leaves a caller's transaction usable.
-            with :ok <- guard.() do
-              inserted =
-                case source do
-                  :generate ->
-                    insert_with_number(build, scope, prefix, field)
-
-                  {:supplied, supplied} ->
-                    raise_sequence_floor(scope, prefix, supplied)
-                    build.(supplied) |> repo().insert()
-                end
-
-              case inserted do
-                {:ok, record} -> {:inserted, record}
-                # A run of taken numbers: nothing is wrong with what is inserted,
-                # so the counter keeps the progress it made past them.
-                {:exhausted, changeset} -> {:exhausted, changeset}
-                {:error, changeset} -> repo().rollback(changeset)
-              end
-            else
+            case guard.() do
+              :ok -> insert_with_source(build, scope, prefix, field, source)
               {:error, reason} -> {:refused, reason}
             end
           end)
@@ -4911,6 +4894,27 @@ defmodule PhoenixKitBilling do
           {:ok, {:refused, reason}} -> {:error, reason}
           {:error, _changeset} = error -> error
         end
+    end
+  end
+
+  # Inside `insert_numbered/6`'s transaction.
+  defp insert_with_source(build, scope, prefix, field, source) do
+    inserted =
+      case source do
+        :generate ->
+          insert_with_number(build, scope, prefix, field)
+
+        {:supplied, supplied} ->
+          raise_sequence_floor(scope, prefix, supplied)
+          build.(supplied) |> repo().insert()
+      end
+
+    case inserted do
+      {:ok, record} -> {:inserted, record}
+      # A run of taken numbers: nothing is wrong with what is inserted,
+      # so the counter keeps the progress it made past them.
+      {:exhausted, changeset} -> {:exhausted, changeset}
+      {:error, changeset} -> repo().rollback(changeset)
     end
   end
 
