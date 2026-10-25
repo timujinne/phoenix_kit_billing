@@ -201,7 +201,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
          |> put_flash(kind, message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to send invoice: #{reason}")}
+        {:noreply, put_flash(socket, :error, "Failed to send invoice: #{Errors.message(reason)}")}
     end
   end
 

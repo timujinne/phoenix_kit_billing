@@ -128,4 +128,26 @@ defmodule PhoenixKitBilling.VoidPaymentRaceTest do
     assert transaction_count(invoice) == 0
     assert Billing.get_invoice!(invoice.uuid).status == "void"
   end
+
+  test "a void committed first: a resend of the stale struct is refused and the trail stays", %{
+    invoice: invoice
+  } do
+    {voider, {:ok, _voided}} = hold_open(fn -> Billing.void_invoice(invoice, "Duplicate") end)
+
+    sender =
+      Task.async(fn ->
+        Billing.send_invoice(invoice, to_email: "customer@example.com", send_email: false)
+      end)
+
+    assert Task.yield(sender, 300) == nil
+
+    send(voider.pid, :commit)
+    assert {:ok, {:ok, {:ok, _}}} = Task.yield(voider, 5_000)
+    assert {:ok, {:error, :invoice_not_sendable}} = Task.yield(sender, 5_000)
+
+    stored = Billing.get_invoice!(invoice.uuid)
+    assert stored.status == "void"
+    assert stored.metadata["void"]["reason"] == "Duplicate"
+    refute Map.has_key?(stored.metadata, "send_history")
+  end
 end

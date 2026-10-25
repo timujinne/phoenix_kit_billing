@@ -3139,21 +3139,14 @@ defmodule PhoenixKitBilling do
   just whether the invoice record itself updated.
   """
   def send_invoice(%Invoice{} = invoice, opts \\ []) do
-    cond do
-      Invoice.sendable?(invoice) ->
-        # First send - change status to "sent"
-        do_send_invoice(invoice, opts, change_status: true)
-
-      Invoice.resendable?(invoice) ->
-        # Resend - don't change status, just send email and record in history
-        do_send_invoice(invoice, opts, change_status: false)
-
-      true ->
-        {:error, :invoice_not_sendable}
+    if Invoice.sendable?(invoice) or Invoice.resendable?(invoice) do
+      do_send_invoice(invoice, opts)
+    else
+      {:error, :invoice_not_sendable}
     end
   end
 
-  defp do_send_invoice(invoice, opts, change_status: change_status) do
+  defp do_send_invoice(invoice, opts) do
     send_email? = Keyword.get(opts, :send_email, true)
     to_email = Keyword.get(opts, :to_email)
 
@@ -3166,31 +3159,10 @@ defmodule PhoenixKitBilling do
     if is_nil(recipient_email) do
       {:error, :no_recipient_email}
     else
-      # Build send history entry
-      send_entry = %{
-        "sent_at" => UtilsDate.utc_now() |> DateTime.to_iso8601(),
-        "email" => recipient_email
-      }
-
-      # Get current send history from metadata
-      current_metadata = invoice.metadata || %{}
-      send_history = Map.get(current_metadata, "send_history", [])
-      updated_send_history = send_history ++ [send_entry]
-      updated_metadata = Map.put(current_metadata, "send_history", updated_send_history)
-
-      # Build changeset
-      changeset =
-        if change_status do
-          invoice
-          |> Invoice.status_changeset("sent")
-          |> Ecto.Changeset.put_change(:metadata, updated_metadata)
-        else
-          invoice
-          |> Ecto.Changeset.change(%{metadata: updated_metadata})
-        end
-
-      case repo().update(changeset) do
+      case record_invoice_sent(invoice, recipient_email) do
         {:ok, updated_invoice} ->
+          updated_invoice = ensure_preloaded(updated_invoice, [:order, :user])
+
           # Broadcast invoice sent event
           Events.broadcast_invoice_sent(updated_invoice)
 
@@ -3220,6 +3192,42 @@ defmodule PhoenixKitBilling do
           error
       end
     end
+  end
+
+  # The status change and the history entry, written on the LOCKED row. The
+  # caller's struct may be minutes old: a void committed since must not be
+  # undone by a send built from it ("sent" over "void", the void trail gone),
+  # and the history is appended to what is stored, not to what was read. The
+  # email goes out only after this has committed, so a refused send mails
+  # nobody.
+  defp record_invoice_sent(invoice, recipient_email) do
+    repo().transaction(fn ->
+      locked = fetch_locked_invoice(invoice) || repo().rollback(:invoice_not_found)
+
+      status_changeset =
+        cond do
+          # First send - change status to "sent"
+          Invoice.sendable?(locked) -> Invoice.status_changeset(locked, "sent")
+          # Resend - don't change status, just record in history
+          Invoice.resendable?(locked) -> Ecto.Changeset.change(locked)
+          true -> repo().rollback(:invoice_not_sendable)
+        end
+
+      send_entry = %{
+        "sent_at" => UtilsDate.utc_now() |> DateTime.to_iso8601(),
+        "email" => recipient_email
+      }
+
+      metadata = locked.metadata || %{}
+      history = Map.get(metadata, "send_history", []) ++ [send_entry]
+
+      case status_changeset
+           |> Ecto.Changeset.put_change(:metadata, Map.put(metadata, "send_history", history))
+           |> repo().update() do
+        {:ok, updated} -> updated
+        {:error, changeset} -> repo().rollback(changeset)
+      end
+    end)
   end
 
   @doc """
@@ -4010,7 +4018,8 @@ defmodule PhoenixKitBilling do
   own transaction only if holding that lock until commit is fine.
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
-  `{:error, :invoice_not_voidable}` or `{:error, changeset}`.
+  `{:error, :invoice_not_voidable}`, `{:error, :invoice_not_found}` when the
+  invoice is gone, or `{:error, changeset}`.
   """
   def void_invoice(%Invoice{} = invoice, reason \\ nil, opts \\ []) do
     # A transaction so the durable event commits with the void.
@@ -4019,7 +4028,7 @@ defmodule PhoenixKitBilling do
         # The caller's struct may be minutes old: a payment recorded since
         # would otherwise be overwritten by the void (status "paid" -> "void"
         # with the money still in the ledger).
-        locked = lock_invoice_for_update(invoice)
+        locked = fetch_locked_invoice(invoice) || repo().rollback(:invoice_not_found)
 
         if Invoice.voidable?(locked) do
           trail = %{
@@ -4496,15 +4505,17 @@ defmodule PhoenixKitBilling do
   # readable.
   # SELECT ... FOR UPDATE on the invoice row: serializes concurrent payment
   # recording for the SAME invoice so the balance check cannot be raced.
-  defp lock_invoice_for_update(%Invoice{uuid: uuid} = invoice) do
+  defp lock_invoice_for_update(%Invoice{} = invoice) do
+    fetch_locked_invoice(invoice) || invoice
+  end
+
+  # The same lock, but `nil` for a row that has vanished: for the callers that
+  # would otherwise go on to UPDATE it and raise.
+  defp fetch_locked_invoice(%Invoice{uuid: uuid}) do
     Invoice
     |> where([i], i.uuid == ^uuid)
     |> lock("FOR UPDATE")
     |> repo().one()
-    |> case do
-      nil -> invoice
-      locked -> locked
-    end
   end
 
   defp build_transaction_attrs(invoice, amount, attrs, admin_user) do
@@ -5378,37 +5389,80 @@ defmodule PhoenixKitBilling do
     success_url = Keyword.fetch!(opts, :success_url)
     provider_opts = Keyword.put_new(opts, :cancel_url, success_url)
 
-    case Providers.create_checkout_session(provider, invoice, provider_opts) do
-      {:ok, session} ->
-        # Record checkout session info on the invoice. The invoice schema
-        # has no dedicated checkout columns, so it is stashed under
-        # metadata["checkout"]. Best-effort: a failed update must not lose
-        # the live session URL we already owe the caller.
-        updated_metadata =
-          Map.put(invoice.metadata || %{}, "checkout", %{
-            "provider_session_id" => session.id,
-            "url" => session.url,
-            "provider" => to_string(provider),
-            "created_at" => UtilsDate.utc_now() |> DateTime.to_iso8601()
-          })
+    # A session for an invoice that is void (or paid) would send the customer
+    # to pay for it. Checked on the stored row, before the provider call - not
+    # under a lock, which must not be held across a network call.
+    if stored_payable?(invoice) do
+      case Providers.create_checkout_session(provider, invoice, provider_opts) do
+        {:ok, session} -> persist_checkout_session(invoice, provider, session)
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :invoice_not_payable}
+    end
+  end
 
-        case invoice
-             |> Ecto.Changeset.change(%{metadata: updated_metadata})
-             |> repo().update() do
-          {:ok, _invoice} ->
-            :ok
+  defp stored_payable?(%Invoice{uuid: uuid}) do
+    case repo().get(Invoice, uuid) do
+      nil -> false
+      stored -> Invoice.payable?(stored)
+    end
+  end
 
-          {:error, changeset} ->
-            Logger.warning(
-              "Checkout session created but failed to persist to invoice " <>
-                "#{invoice.invoice_number}: #{inspect(changeset.errors)}"
-            )
-        end
-
+  # Record checkout session info on the invoice. The invoice schema has no
+  # dedicated checkout columns, so it is stashed under metadata["checkout"],
+  # merged into the LOCKED row. The invoice may have been voided while the
+  # provider call was in flight: then nothing is written and the customer is
+  # not sent to a session for a void invoice (the provider's session just
+  # expires). A failed update is only logged: it must not lose the live
+  # session URL we already owe the caller.
+  defp persist_checkout_session(invoice, provider, session) do
+    case record_checkout_session(invoice, provider, session) do
+      :ok ->
         {:ok, session.url}
 
+      {:error, :invoice_not_payable} ->
+        {:error, :invoice_not_payable}
+
       {:error, reason} ->
-        {:error, reason}
+        Logger.warning(
+          "Checkout session created but failed to persist to invoice " <>
+            "#{invoice.invoice_number}: #{inspect(reason)}"
+        )
+
+        {:ok, session.url}
+    end
+  end
+
+  @doc false
+  # Public for the tests only: the persistence half of create_checkout_session/3.
+  def record_checkout_session(%Invoice{} = invoice, provider, session) do
+    result =
+      repo().transaction(fn ->
+        locked = fetch_locked_invoice(invoice) || repo().rollback(:invoice_not_found)
+
+        unless Invoice.payable?(locked), do: repo().rollback(:invoice_not_payable)
+
+        checkout = %{
+          "provider_session_id" => session.id,
+          "url" => session.url,
+          "provider" => to_string(provider),
+          "created_at" => UtilsDate.utc_now() |> DateTime.to_iso8601()
+        }
+
+        case locked
+             |> Ecto.Changeset.change(%{
+               metadata: Map.put(locked.metadata || %{}, "checkout", checkout)
+             })
+             |> repo().update() do
+          {:ok, _invoice} -> :ok
+          {:error, changeset} -> repo().rollback(changeset.errors)
+        end
+      end)
+
+    case result do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
