@@ -3878,6 +3878,11 @@ defmodule PhoenixKitBilling do
           # overpayment the balance check exists to prevent.
           locked = lock_invoice_for_update(invoice)
 
+          # The payable? check above ran on the caller's struct, before the
+          # lock. A void committed in between would otherwise get its status
+          # overwritten by "paid" (and the transition validation raises).
+          unless Invoice.payable?(locked), do: repo().rollback(:invoice_not_payable)
+
           # A settlement needs a LEDGER ROW, not just a status and a number.
           # Without one the invoice reads paid while its transactions sum to
           # zero, and a later refund recalculates paid_amount from those
@@ -4566,17 +4571,8 @@ defmodule PhoenixKitBilling do
         # recalculated paid_amount went negative and `update!` raised.
         locked = lock_invoice_for_update(invoice)
 
-        cond do
-          Decimal.positive?(amount) and
-              Decimal.compare(amount, Invoice.remaining_amount(locked)) == :gt ->
-            repo().rollback(:exceeds_remaining)
-
-          Decimal.negative?(amount) and
-              Decimal.compare(Decimal.negate(amount), locked.paid_amount) == :gt ->
-            repo().rollback(:exceeds_paid_amount)
-
-          true ->
-            :ok
+        with {:error, reason} <- check_transaction_fits(locked, amount) do
+          repo().rollback(reason)
         end
 
         case %Transaction{} |> Transaction.changeset(transaction_attrs) |> repo().insert() do
@@ -4609,6 +4605,31 @@ defmodule PhoenixKitBilling do
 
       error ->
         error
+    end
+  end
+
+  # What the LOCKED invoice allows: see the comments in do_record_transaction/4.
+  defp check_transaction_fits(locked, amount) do
+    cond do
+      Decimal.positive?(amount) and
+          Decimal.compare(amount, Invoice.remaining_amount(locked)) == :gt ->
+        {:error, :exceeds_remaining}
+
+      # `record_payment/3` checked this on the caller's struct. A void
+      # committed since would let money land on a void invoice. After the
+      # balance check so that the second of two payments that each cover the
+      # balance still reads `:exceeds_remaining`, not `:not_payable` (the
+      # first one made the invoice "paid"). Refunds (negative amounts) are
+      # bounded by what was paid instead.
+      Decimal.positive?(amount) and not Invoice.payable?(locked) ->
+        {:error, :not_payable}
+
+      Decimal.negative?(amount) and
+          Decimal.compare(Decimal.negate(amount), locked.paid_amount) == :gt ->
+        {:error, :exceeds_paid_amount}
+
+      true ->
+        :ok
     end
   end
 
