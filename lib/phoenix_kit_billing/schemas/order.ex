@@ -227,7 +227,7 @@ defmodule PhoenixKitBilling.Order do
       :paid_at,
       :cancelled_at
     ])
-    |> refuse_cancellation()
+    |> restrict_status_change()
     |> validate_required([:total, :currency])
     |> validate_guest_order_billing()
     |> validate_inclusion(:status, @valid_statuses)
@@ -249,20 +249,32 @@ defmodule PhoenixKitBilling.Order do
     )
   end
 
-  # Cancelling a stored order goes through `PhoenixKitBilling.cancel_order/3`,
-  # which writes the reason and the cancellation trail an integration reads. A
-  # form or a crafted submit that sets the status here would cancel without it.
-  defp refuse_cancellation(%Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset) do
+  # A stored order's status moves through the transition functions, which check
+  # it on the locked row and do what the move means. Here (the order form, any
+  # caller of `update_order/2`) it can only go forward from draft or pending to
+  # pending or confirmed: going back would make `cancelled_from` lie about an
+  # order that may already have been sent somewhere, and cancelling, paying or
+  # refunding belong to `cancel_order/3`, `mark_order_paid/2` and
+  # `mark_order_refunded/1`.
+  defp restrict_status_change(%Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset) do
     changeset = delete_change(changeset, :cancelled_at)
 
-    if get_change(changeset, :status) == "cancelled" do
-      add_error(changeset, :status, "orders are cancelled with cancel_order/3")
-    else
-      changeset
+    case get_change(changeset, :status) do
+      nil ->
+        changeset
+
+      "cancelled" ->
+        add_error(changeset, :status, "orders are cancelled with cancel_order/3")
+
+      to when to in ~w(pending confirmed) ->
+        validate_status_transition(changeset, changeset.data.status, to)
+
+      to ->
+        add_error(changeset, :status, "an order is moved to #{to} by its own action")
     end
   end
 
-  defp refuse_cancellation(changeset), do: changeset
+  defp restrict_status_change(changeset), do: changeset
 
   # Guest orders must have billing_snapshot with email when no billing_profile_uuid
   defp validate_guest_order_billing(changeset) do
