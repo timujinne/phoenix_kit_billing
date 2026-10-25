@@ -81,9 +81,9 @@
         <%!-- Void - available for draft/sent/overdue --%>
         <%= if @invoice.status in ["draft", "sent", "overdue"] do %>
           <button
-            phx-click="void_invoice"
+            id="void-invoice-button"
+            phx-click="open_void_modal"
             class="btn btn-error btn-outline btn-sm"
-            data-confirm={gettext("Are you sure you want to void this invoice?")}
           >
             <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Void")}
           </button>
@@ -116,6 +116,24 @@
         <% end %>
       </:actions>
     </.admin_page_header>
+
+    <%!-- A void invoice says so loudly; the reason is the trail void_invoice/3 left. --%>
+    <%= if @invoice.status == "void" do %>
+      <div id="invoice-void-mark" role="alert" class="alert alert-error alert-soft mb-6">
+        <.icon name="hero-no-symbol" class="w-6 h-6" />
+        <div>
+          <h3 class="font-bold uppercase">{gettext("Void")}</h3>
+          <%= if @invoice.voided_at do %>
+            <p class="text-sm">
+              {gettext("Voided")} <.time_ago datetime={@invoice.voided_at} />
+            </p>
+          <% end %>
+          <%= if reason = PhoenixKitBilling.Invoice.void_reason(@invoice) do %>
+            <p id="invoice-void-reason" class="text-sm whitespace-pre-wrap">{reason}</p>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <%!-- Main Content --%>
@@ -833,6 +851,40 @@
         </form>
       </div>
       <div class="modal-backdrop" phx-click="close_refund_modal"></div>
+    </div>
+  <% end %>
+
+  <%!-- Void Invoice Modal --%>
+  <%= if @show_void_modal do %>
+    <div id="void-invoice-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Void Invoice")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Void invoice %{number}? This cannot be undone.", number: @invoice.invoice_number)}
+        </p>
+
+        <form id="void-invoice-form" phx-submit="void_invoice">
+          <div class="fieldset mt-4">
+            <label class="label">
+              <span class="fieldset-legend">{gettext("Reason (optional)")}</span>
+            </label>
+            <textarea
+              name="reason"
+              rows="3"
+              class="textarea w-full"
+              placeholder={gettext("Why is this invoice being voided?")}
+            ></textarea>
+          </div>
+
+          <div class="modal-action">
+            <button type="button" phx-click="close_void_modal" class="btn">{gettext("Cancel")}</button>
+            <button type="submit" class="btn btn-error">
+              <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Void")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_void_modal"></div>
     </div>
   <% end %>
 

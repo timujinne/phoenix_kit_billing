@@ -177,6 +177,13 @@ defmodule PhoenixKitBilling.ErrorsTest do
     test ":not_supported",
       do: assert(Errors.message(:not_supported) == "This operation is not supported.")
 
+    test ":order_has_invoices",
+      do:
+        assert(
+          Errors.message(:order_has_invoices) ==
+            "This order has invoices and cannot be deleted."
+        )
+
     test ":order_not_cancellable",
       do:
         assert(

@@ -117,4 +117,18 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       refute Invoice.open?(%Invoice{status: "void"})
     end
   end
+
+  describe "Invoice.void_reason/1" do
+    test "reads the reason from the trail" do
+      assert Invoice.void_reason(%Invoice{metadata: %{"void" => %{"reason" => "Duplicate"}}}) ==
+               "Duplicate"
+    end
+
+    test "is nil without a reason, a trail or metadata" do
+      assert Invoice.void_reason(%Invoice{metadata: %{"void" => %{"reason" => nil}}}) == nil
+      assert Invoice.void_reason(%Invoice{metadata: %{"void" => %{"reason" => ""}}}) == nil
+      assert Invoice.void_reason(%Invoice{metadata: %{}}) == nil
+      assert Invoice.void_reason(%Invoice{metadata: nil}) == nil
+    end
+  end
 end

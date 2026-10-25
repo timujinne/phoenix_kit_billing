@@ -420,6 +420,16 @@ defmodule PhoenixKitBilling.Invoice do
   def open?(%__MODULE__{}), do: true
 
   @doc """
+  The reason a void invoice was voided with, from `metadata["void"]`, or `nil`
+  (no reason was given, or the invoice was voided before the trail existed).
+  """
+  def void_reason(%__MODULE__{metadata: %{"void" => %{"reason" => reason}}})
+      when is_binary(reason) and reason != "",
+      do: reason
+
+  def void_reason(%__MODULE__{}), do: nil
+
+  @doc """
   Checks if invoice has a receipt.
   """
   def has_receipt?(%__MODULE__{receipt_number: nil}), do: false

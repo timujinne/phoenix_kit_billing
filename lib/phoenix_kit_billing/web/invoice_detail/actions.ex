@@ -12,6 +12,7 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.Activity
+  alias PhoenixKitBilling.Errors
   alias PhoenixKitBilling.Paths
 
   def record_payment(socket) do
@@ -338,24 +339,36 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
     end
   end
 
-  def void_invoice(socket) do
-    case Billing.void_invoice(socket.assigns.invoice) do
+  def void_invoice(socket, reason) do
+    actor_uuid = actor_uuid(socket)
+
+    case Billing.void_invoice(socket.assigns.invoice, reason, actor_uuid: actor_uuid) do
       {:ok, invoice} ->
         Activity.log("billing.invoice_voided",
-          actor_uuid: actor_uuid(socket),
+          actor_uuid: actor_uuid,
           actor_role: actor_role(socket),
           resource_type: "invoice",
           resource_uuid: invoice.uuid,
-          metadata: %{"invoice_number" => invoice.invoice_number, "status" => invoice.status}
+          # The operator's own reason, typed for the audit trail (not customer data).
+          metadata:
+            %{"invoice_number" => invoice.invoice_number, "status" => invoice.status}
+            |> put_reason(invoice.metadata["void"]["reason"])
         )
 
         {:noreply,
          socket
          |> reload_invoice()
+         |> Phoenix.Component.assign(:show_void_modal, false)
          |> put_flash(:info, "Invoice voided")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to void invoice: #{reason}")}
+        # The page may be showing a status the invoice has since left (a
+        # payment landed), so show what is stored now.
+        {:noreply,
+         socket
+         |> reload_invoice()
+         |> Phoenix.Component.assign(:show_void_modal, false)
+         |> put_flash(:error, "Failed to void invoice: #{Errors.message(reason)}")}
     end
   end
 
@@ -384,6 +397,9 @@ defmodule PhoenixKitBilling.Web.InvoiceDetail.Actions do
   end
 
   # Private helpers
+
+  defp put_reason(metadata, nil), do: metadata
+  defp put_reason(metadata, reason), do: Map.put(metadata, "reason", reason)
 
   defp actor_uuid(socket), do: Activity.actor_uuid(socket)
   defp actor_role(socket), do: Activity.actor_role(socket)

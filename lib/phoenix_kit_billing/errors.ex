@@ -73,6 +73,7 @@ defmodule PhoenixKitBilling.Errors do
           | :not_payable
           | :not_refundable
           | :not_supported
+          | :order_has_invoices
           | :order_not_cancellable
           | :order_not_editable
           | :order_not_payable
@@ -162,6 +163,9 @@ defmodule PhoenixKitBilling.Errors do
   def message(:not_payable), do: gettext("This record cannot be paid in its current state.")
   def message(:not_refundable), do: gettext("This record cannot be refunded.")
   def message(:not_supported), do: gettext("This operation is not supported.")
+
+  def message(:order_has_invoices),
+    do: gettext("This order has invoices and cannot be deleted.")
 
   def message(:order_not_cancellable),
     do: gettext("This order cannot be cancelled in its current state.")
