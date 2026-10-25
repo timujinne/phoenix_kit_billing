@@ -118,10 +118,16 @@ defmodule PhoenixKitBilling.Notifications do
         @payment_failed_action,
         payment_failed_text(invoice, reason),
         "hero-exclamation-triangle",
-        Routes.path("/admin/billing/invoices")
+        payment_failed_link(invoice, reason)
       )
     end)
   end
+
+  # A charge on a void invoice is worked on that invoice: it lists the charge.
+  defp payment_failed_link(%{uuid: uuid}, :invoice_void) when is_binary(uuid),
+    do: Paths.invoice_detail(uuid)
+
+  defp payment_failed_link(_invoice, _reason), do: Routes.path("/admin/billing/invoices")
 
   defp payment_failed_text(invoice, :invoice_void) do
     "A payment arrived for void invoice #{number(invoice)} and was not recorded - " <>

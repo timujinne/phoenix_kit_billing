@@ -4633,3 +4633,8 @@ msgstr "Анульовано: %{date}"
 #, elixir-autogen, elixir-format
 msgid "This order has invoices and cannot be deleted."
 msgstr "У замовлення є рахунки, його не можна видалити."
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:144
+#, elixir-autogen, elixir-format
+msgid "Payment received after void - refund it at the payment provider"
+msgstr "Платіж отримано після анулювання — поверніть його через платіжного провайдера"

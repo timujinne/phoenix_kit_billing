@@ -241,6 +241,7 @@ defmodule PhoenixKitBilling.Workers.SubscriptionRenewalWorker do
     {:error, :no_payment_method}
   end
 
+  # No void handling: the invoice is created in the transaction that charges, so nobody can void it first.
   defp charge_payment_method(%Subscription{payment_method: pm} = subscription, invoice) do
     if PaymentMethod.usable?(pm) do
       # Providers.charge_payment_method expects the payment_method map with :provider key

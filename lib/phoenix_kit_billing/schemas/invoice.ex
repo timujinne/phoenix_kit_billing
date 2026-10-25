@@ -430,6 +430,17 @@ defmodule PhoenixKitBilling.Invoice do
   def void_reason(%__MODULE__{}), do: nil
 
   @doc """
+  The provider charges that arrived after the invoice was voided, from
+  `metadata["void"]["payments_after_void"]`: money that is not on the ledger
+  and has to be refunded at the provider. Empty when there are none.
+  """
+  def payments_after_void(%__MODULE__{metadata: %{"void" => %{"payments_after_void" => list}}})
+      when is_list(list),
+      do: list
+
+  def payments_after_void(%__MODULE__{}), do: []
+
+  @doc """
   Checks if invoice has a receipt.
   """
   def has_receipt?(%__MODULE__{receipt_number: nil}), do: false

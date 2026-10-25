@@ -131,4 +131,76 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       assert Invoice.void_reason(%Invoice{metadata: nil}) == nil
     end
   end
+
+  describe "record_payment_after_void/2" do
+    @charge %{
+      provider: :stripe,
+      charge_id: "ch_1",
+      amount: Decimal.new("100.00"),
+      currency: "EUR",
+      event_id: "evt_1"
+    }
+
+    test "appends the charge to the void trail, keeping the rest of it", %{user: user} do
+      invoice = sent_invoice(user)
+      {:ok, voided} = Billing.void_invoice(invoice, "Duplicate")
+
+      assert {:ok, updated} = Billing.record_payment_after_void(voided, @charge)
+
+      assert %{"reason" => "Duplicate", "payments_after_void" => [entry]} =
+               updated.metadata["void"]
+
+      assert %{
+               "provider" => "stripe",
+               "charge_id" => "ch_1",
+               "amount" => "100.00",
+               "currency" => "EUR",
+               "event_id" => "evt_1",
+               "at" => at
+             } = entry
+
+      assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(at)
+      assert map_size(entry) == 6
+      assert Invoice.payments_after_void(Billing.get_invoice!(invoice.uuid)) == [entry]
+    end
+
+    test "appends to the stored trail and counts an event once", %{user: user} do
+      {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
+
+      {:ok, _} = Billing.record_payment_after_void(voided, @charge)
+
+      {:ok, _} =
+        Billing.record_payment_after_void(voided, %{
+          @charge
+          | charge_id: "ch_2",
+            event_id: "evt_2"
+        })
+
+      {:ok, again} = Billing.record_payment_after_void(voided, @charge)
+
+      assert [%{"charge_id" => "ch_1"}, %{"charge_id" => "ch_2"}] =
+               again.metadata["void"]["payments_after_void"]
+    end
+
+    test "works on an invoice voided before the trail existed", %{user: user} do
+      invoice = sent_invoice(user)
+      {:ok, old} = invoice |> Invoice.status_changeset("void") |> Repo.update()
+
+      assert {:ok, updated} = Billing.record_payment_after_void(old, @charge)
+      assert [_] = updated.metadata["void"]["payments_after_void"]
+      assert Invoice.void_reason(updated) == nil
+    end
+
+    test "refuses an invoice that is not void", %{user: user} do
+      assert {:error, :invoice_not_void} =
+               Billing.record_payment_after_void(sent_invoice(user), @charge)
+    end
+  end
+
+  describe "Invoice.payments_after_void/1" do
+    test "is empty without a trail" do
+      assert Invoice.payments_after_void(%Invoice{metadata: %{}}) == []
+      assert Invoice.payments_after_void(%Invoice{metadata: %{"void" => %{}}}) == []
+    end
+  end
 end

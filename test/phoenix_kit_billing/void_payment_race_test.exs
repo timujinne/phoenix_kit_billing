@@ -17,7 +17,7 @@ defmodule PhoenixKitBilling.VoidPaymentRaceTest do
   alias PhoenixKit.Users.Auth
   alias PhoenixKit.Users.Auth.User
   alias PhoenixKitBilling, as: Billing
-  alias PhoenixKitBilling.{Invoice, Transaction}
+  alias PhoenixKitBilling.{Invoice, Transaction, WebhookEvent, WebhookProcessor}
   alias PhoenixKitBilling.Test.Repo
 
   setup do
@@ -149,5 +149,46 @@ defmodule PhoenixKitBilling.VoidPaymentRaceTest do
     assert stored.status == "void"
     assert stored.metadata["void"]["reason"] == "Duplicate"
     refute Map.has_key?(stored.metadata, "send_history")
+  end
+
+  test "a webhook payment racing a void is answered as a payment on a void invoice", %{
+    invoice: invoice
+  } do
+    event_id = "evt_race_#{System.unique_integer([:positive])}"
+    on_exit(fn -> Repo.delete_all(from(e in WebhookEvent, where: e.event_id == ^event_id)) end)
+
+    event = %{
+      event_id: event_id,
+      provider: :stripe,
+      type: "checkout.completed",
+      data: %{
+        mode: "payment",
+        invoice_uuid: invoice.uuid,
+        amount_total: 10_000,
+        currency: "EUR",
+        payment_intent_id: "pi_race_1"
+      }
+    }
+
+    {voider, {:ok, _voided}} = hold_open(fn -> Billing.void_invoice(invoice, "Duplicate") end)
+
+    # It read the invoice as sent, so it goes for the lock and waits there.
+    processor = Task.async(fn -> WebhookProcessor.process(event) end)
+    assert Task.yield(processor, 300) == nil
+
+    send(voider.pid, :commit)
+    assert {:ok, {:ok, {:ok, _}}} = Task.yield(voider, 5_000)
+
+    # Not a failed payment to retry: the charge is on the void trail.
+    assert {:ok, {:ok, :invoice_void}} = Task.yield(processor, 5_000)
+
+    assert transaction_count(invoice) == 0
+    assert %WebhookEvent{processed: true} = Repo.get_by!(WebhookEvent, event_id: event_id)
+
+    stored = Billing.get_invoice!(invoice.uuid)
+    assert stored.status == "void"
+
+    assert [%{"charge_id" => "pi_race_1", "event_id" => ^event_id}] =
+             stored.metadata["void"]["payments_after_void"]
   end
 end

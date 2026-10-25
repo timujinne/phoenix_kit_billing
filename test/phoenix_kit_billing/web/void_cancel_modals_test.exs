@@ -233,4 +233,45 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
       assert stored.internal_notes == nil
     end
   end
+
+  describe "invoice detail: a void invoice" do
+    test "the mark is the noun, not the verb, in the admin's language", %{conn: conn, user: user} do
+      {:ok, voided} = Billing.void_invoice(sent_invoice(user))
+
+      {:ok, view, _html} =
+        conn
+        |> put_test_locale("uk")
+        |> live("/en/admin/billing/invoices/#{voided.uuid}")
+
+      assert has_element?(view, "#invoice-void-mark h3", "АНУЛЬОВАНО")
+    end
+
+    test "warns about a payment that arrived after the void", %{conn: conn, user: user} do
+      {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
+      {:ok, _} = Billing.record_payment_after_void(voided, charge())
+
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{voided.uuid}")
+
+      assert has_element?(view, "#invoice-payments-after-void", "ch_1")
+      assert has_element?(view, "#invoice-payments-after-void", "100.00 EUR")
+    end
+
+    test "has no warning without one", %{conn: conn, user: user} do
+      {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
+
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{voided.uuid}")
+
+      refute has_element?(view, "#invoice-payments-after-void")
+    end
+  end
+
+  defp charge do
+    %{
+      provider: :stripe,
+      charge_id: "ch_1",
+      amount: Decimal.new("100.00"),
+      currency: "EUR",
+      event_id: "evt_1"
+    }
+  end
 end

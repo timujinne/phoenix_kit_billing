@@ -4068,6 +4068,58 @@ defmodule PhoenixKitBilling do
     end
   end
 
+  @doc """
+  Keeps, on a void invoice, a provider charge that arrived after the void.
+
+  The money is NOT booked on the invoice. It is appended to
+  `metadata["void"]["payments_after_void"]` as `"provider"`, `"charge_id"`,
+  `"amount"`, `"currency"`, `"event_id"` and `"at"` - ids and amounts only - so
+  that the operator can find the charge and refund it at the provider. An
+  `event_id` already on the list is not added again.
+
+  `charge` is a map with the keys `:provider`, `:charge_id`, `:amount`,
+  `:currency` and `:event_id`. Takes the invoice row lock.
+
+  Returns `{:ok, invoice}`, `{:error, :invoice_not_void}` when the stored
+  invoice is not void, or `{:error, :invoice_not_found}`.
+  """
+  def record_payment_after_void(%Invoice{} = invoice, charge) when is_map(charge) do
+    repo().transaction(fn ->
+      locked = fetch_locked_invoice(invoice) || repo().rollback(:invoice_not_found)
+      if locked.status != "void", do: repo().rollback(:invoice_not_void)
+
+      metadata = locked.metadata || %{}
+      trail = if is_map(metadata["void"]), do: metadata["void"], else: %{}
+      entries = Map.get(trail, "payments_after_void", [])
+
+      if charge_recorded?(entries, charge[:event_id]) do
+        locked
+      else
+        entry = %{
+          "provider" => charge[:provider] && to_string(charge[:provider]),
+          "charge_id" => charge[:charge_id] && to_string(charge[:charge_id]),
+          "amount" => charge_amount(charge[:amount]),
+          "currency" => charge[:currency],
+          "event_id" => charge[:event_id],
+          "at" => now_iso()
+        }
+
+        trail = Map.put(trail, "payments_after_void", entries ++ [entry])
+
+        locked
+        |> Ecto.Changeset.change(metadata: Map.put(metadata, "void", trail))
+        |> repo().update!()
+      end
+    end)
+  end
+
+  defp charge_recorded?(_entries, nil), do: false
+  defp charge_recorded?(entries, event_id), do: Enum.any?(entries, &(&1["event_id"] == event_id))
+
+  defp charge_amount(%Decimal{} = amount), do: Decimal.to_string(amount, :normal)
+  defp charge_amount(nil), do: nil
+  defp charge_amount(amount), do: to_string(amount)
+
   # A free-text reason as typed in a form: surrounding whitespace is noise and
   # a blank one means no reason was given.
   defp normalize_reason(reason) when is_binary(reason) do

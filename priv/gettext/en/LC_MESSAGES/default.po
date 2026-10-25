@@ -4761,3 +4761,8 @@ msgstr "Voided on %{date}"
 #, elixir-autogen, elixir-format
 msgid "This order has invoices and cannot be deleted."
 msgstr "This order has invoices and cannot be deleted."
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:144
+#, elixir-autogen, elixir-format
+msgid "Payment received after void - refund it at the payment provider"
+msgstr "Payment received after void - refund it at the payment provider"

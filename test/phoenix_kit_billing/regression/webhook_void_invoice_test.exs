@@ -100,4 +100,39 @@ defmodule PhoenixKitBilling.Regression.WebhookVoidInvoiceTest do
     assert %WebhookEvent{processed: false, retry_count: 1} =
              Repo.get_by!(WebhookEvent, event_id: "evt_draft_1")
   end
+
+  test "the charge is kept on the void trail, and the log carries ids only", %{invoice: invoice} do
+    {:ok, _voided} = Billing.void_invoice(invoice, "Duplicate")
+
+    event =
+      put_in(payment_event(invoice, "evt_void_trail").data[:customer_email], "leak@example.com")
+
+    log =
+      capture_log([level: :error], fn ->
+        assert {:ok, :invoice_void} = WebhookProcessor.process(event)
+      end)
+
+    refute log =~ "leak@example.com"
+    assert log =~ "pi_void_1"
+
+    assert [entry] = Billing.get_invoice!(invoice.uuid).metadata["void"]["payments_after_void"]
+
+    assert %{
+             "provider" => "stripe",
+             "charge_id" => "pi_void_1",
+             "amount" => amount,
+             "currency" => "EUR",
+             "event_id" => "evt_void_trail"
+           } = entry
+
+    assert Decimal.equal?(Decimal.new(amount), 100)
+  end
+
+  test "the admins' notification leads to the invoice itself", %{admin: admin, invoice: invoice} do
+    {:ok, _voided} = Billing.void_invoice(invoice)
+    capture_log(fn -> WebhookProcessor.process(payment_event(invoice, "evt_void_link")) end)
+
+    {[notification], _total} = Notifications.list_for_user(admin.uuid)
+    assert notification.metadata["notification_link"] =~ "/invoices/#{invoice.uuid}"
+  end
 end
