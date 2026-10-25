@@ -157,14 +157,6 @@ alone.
 
 ### Landmines
 
-- **`phoenix_kit_subscriptions` has no `subscription_type_uuid` column** on a
-  from-scratch `PhoenixKit.Migration.ensure_current/2` build: core's V65 renames
-  `plan_uuid`, which V33 never creates (V33 uses an integer `plan_id`). Every
-  `Subscription` insert and the Subscriptions LiveView raise
-  `Postgrex.Error (undefined_column)`. Four tests carry `@tag :skip` for it
-  (`test/phoenix_kit_billing/integration/context_test.exs`,
-  `test/phoenix_kit_billing/web/listing_lvs_test.exs`). It is a core chain gap, not
-  fixable from this repo — do not "fix" it here.
 - **Tab labels never reach the `.pot` automatically.** A new tab renders in raw
   English under `ru`/`et`/`uk` unless you add the msgid by hand; `pot_drift_test.exs`
   fails when you forget.
@@ -373,7 +365,7 @@ in `README.md`.
 
 Owns a versioned chain: `PhoenixKitBilling.Migrations` via `migration_module/0`,
 marker `pkb_schema:<N>` as a `COMMENT ON TABLE
-phoenix_kit_payment_provider_configs`, currently **V5**. A marker-less table reads
+phoenix_kit_payment_provider_configs`, currently **V6**. A marker-less table reads
 as version 0 (the core-baseline shape). `mix phoenix_kit.update` applies the chain
 in hosts; the test suite applies it by executing
 `Migrations.up_statements/2` as data (see Testing).
@@ -403,6 +395,20 @@ in hosts; the test suite applies it by executing
   that belongs to whichever release owns getting it right. Every reader treats
   `nil` as "unknown".
 - **V4 adopts the remaining core-baseline billing tables** (no shape change).
+- **V6 closes V4's ordering gap**: V2 and V3 alter `phoenix_kit_currencies` and
+  `phoenix_kit_orders`, which V4 creates, so on a database without core's copy
+  V2 failed first. V6 emits those two tables' base `CREATE TABLE IF NOT EXISTS`
+  (shared with V4) **between V1 and V2**, and carries core's seed rows (EUR
+  default/GBP/USD currencies; bank_transfer/cod/paypal/stripe payment options)
+  inside the `DO` block that creates the table — so they appear only on a
+  database this chain builds and never over a host's own rows (re-seeding with
+  `ON CONFLICT DO NOTHING` would restore deleted ones, and EUR as default would
+  collide with V2's unique index). A target below 6 builds the old chain. Core
+  still creates all of these first; since V6 this chain builds them alone
+  (`test/phoenix_kit_billing/integration/migrations_build_alone_test.exs`, seeds in
+  `migrations_adoption_test.exs`). A shape change is a new version here, never a
+  core migration. The email templates core seeds for billing are not carried:
+  `EmailDefaults` is billing's own fallback.
 - **V5 lets a payer be a billing email instead of an account**:
   `phoenix_kit_invoices.user_uuid` and `phoenix_kit_transactions.user_uuid`
   drop `NOT NULL`, and `phoenix_kit_invoices_payer_check` requires a user or a
@@ -415,7 +421,8 @@ in hosts; the test suite applies it by executing
   core-created; only core's own baseline rollback may drop them.
 - A version that changes the shape of a core-created table can put core's
   `ExpectedSchema` manifest out of date — coordinate before adding one, do not
-  assume silence means agreement.
+  assume silence means agreement. Core's own chain no longer touches module
+  tables (since V223), so a change belongs here.
 - The schema prefix is validated against `^[a-zA-Z_][a-zA-Z0-9_]*$` before it
   reaches interpolated DDL, and an invalid prefix must surface as the
   `ArgumentError`, never be swallowed into version 0.
@@ -471,7 +478,6 @@ session), `ActivityLogAssertions`. Test-only deps: `lazy_html` for HTML assertio
 `.dialyzer_ignore.exs` filters known third-party warnings. `mix test.setup` creates
 the test repo, `mix test.reset` drops and recreates it.
 
-Four subscription tests are `@tag :skip` for a core chain gap — see Landmines.
 
 ## Feature notes
 
@@ -499,16 +505,12 @@ publish has succeeded.
 
 ## Pull requests & commits
 
-- Commit messages start with an action verb (`Add`, `Update`, `Fix`, `Remove`, `Merge`). No AI attribution and no `Co-Authored-By` trailers.
+- Commit messages start with an action verb (`Add`, `Update`, `Fix`, `Remove`, `Merge`).
 - Version bumps and CHANGELOG entries land with the release commit on upstream, not in feature PRs.
 - Review files live in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/{AGENT}_REVIEW.md`, one file per reviewing agent, never edited by another agent; `FOLLOW_UP.md` records how each finding was resolved. Severities: `BUG - CRITICAL/HIGH/MEDIUM`, `IMPROVEMENT - HIGH/MEDIUM`, `NITPICK`.
 
 ## TODOs
 
-- **Subscription persistence is blocked on core.** Four tests stay `@tag :skip`
-  until core's chain creates `phoenix_kit_subscriptions.subscription_type_uuid` on
-  a from-scratch build; drop the tags then. The core fix also needs a pin bump here
-  if it ships behind one.
 - **Compat shim removal.** Delete `lib/phoenix_kit_billing/compat/billing.ex` and
   the `elixirc_options: [ignore_module_conflict: true]` line in `mix.exs` once core
   no longer ships the `PhoenixKit.Modules.Billing` namespace. The option exists only

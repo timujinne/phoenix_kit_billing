@@ -2384,14 +2384,7 @@ defmodule PhoenixKitBilling do
   not allow the transition.
   """
   def confirm_order(%Order{} = order) do
-    result =
-      transition_order(order, fn current ->
-        current
-        |> Order.status_changeset("confirmed")
-        |> repo().update()
-      end)
-
-    case result do
+    case confirm_order_transition(order) do
       {:ok, confirmed_order} ->
         Events.broadcast_order_confirmed(confirmed_order)
         {:ok, confirmed_order}
@@ -2399,6 +2392,14 @@ defmodule PhoenixKitBilling do
       error ->
         error
     end
+  end
+
+  defp confirm_order_transition(order) do
+    transition_order(order, fn current ->
+      current
+      |> Order.status_changeset("confirmed")
+      |> repo().update()
+    end)
   end
 
   @doc """
@@ -2416,24 +2417,7 @@ defmodule PhoenixKitBilling do
   is not `"confirmed"`, or `{:error, changeset}`.
   """
   def mark_order_paid(%Order{} = order, opts \\ []) do
-    result =
-      transition_order(order, fn current ->
-        if Order.payable?(current) do
-          changeset = Order.status_changeset(current, "paid")
-
-          changeset =
-            case opts[:payment_method] do
-              nil -> changeset
-              pm -> Ecto.Changeset.put_change(changeset, :payment_method, pm)
-            end
-
-          repo().update(changeset)
-        else
-          {:error, :order_not_payable}
-        end
-      end)
-
-    case result do
+    case pay_order(order, opts) do
       {:ok, paid_order} ->
         Events.broadcast_order_paid(paid_order)
         {:ok, paid_order}
@@ -2441,6 +2425,24 @@ defmodule PhoenixKitBilling do
       error ->
         error
     end
+  end
+
+  defp pay_order(order, opts) do
+    transition_order(order, fn current ->
+      if Order.payable?(current) do
+        changeset = Order.status_changeset(current, "paid")
+
+        changeset =
+          case opts[:payment_method] do
+            nil -> changeset
+            pm -> Ecto.Changeset.put_change(changeset, :payment_method, pm)
+          end
+
+        repo().update(changeset)
+      else
+        {:error, :order_not_payable}
+      end
+    end)
   end
 
   @doc """
@@ -2454,23 +2456,28 @@ defmodule PhoenixKitBilling do
   status is not `"paid"`, or `{:error, changeset}`.
   """
   def mark_order_refunded(%Order{} = order) do
-    result =
-      transition_order(order, fn current ->
-        if current.status == "paid" do
-          current
-          |> Order.status_changeset("refunded")
-          |> repo().update()
-        else
-          {:error, :order_not_refundable}
-        end
-      end)
+    case refund_order(order) do
+      {:ok, refunded_order} ->
+        Events.broadcast_order_refunded(refunded_order)
+        {:ok, refunded_order}
 
-    # After the transaction, so subscribers never see an order that rolls back.
-    with {:ok, refunded_order} <- result do
-      Events.broadcast_order_refunded(refunded_order)
+      error ->
+        error
     end
+  end
 
-    result
+  # The transition without the broadcast, for `record_refund/3`, which runs it
+  # inside its transaction and sends the broadcast after the commit.
+  defp refund_order(%Order{} = order) do
+    transition_order(order, fn current ->
+      if current.status == "paid" do
+        current
+        |> Order.status_changeset("refunded")
+        |> repo().update()
+      else
+        {:error, :order_not_refundable}
+      end
+    end)
   end
 
   @doc """
@@ -2632,7 +2639,10 @@ defmodule PhoenixKitBilling do
   end
 
   defp write_order_sync(uuid, params) do
-    order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR UPDATE") |> repo().one()
+    # NO KEY UPDATE, like `lock_order_status/1`: it queues behind every other
+    # writer of the row but not behind the FOR KEY SHARE an invoice insert
+    # takes on it through its foreign key.
+    order = Order |> where([o], o.uuid == ^uuid) |> lock("FOR NO KEY UPDATE") |> repo().one()
     current = order && Order.revision(order)
 
     cond do
@@ -3899,7 +3909,11 @@ defmodule PhoenixKitBilling do
       case result do
         {:ok, paid_invoice} ->
           Events.broadcast_invoice_paid(paid_invoice)
-          maybe_mark_linked_order_paid(paid_invoice)
+
+          Enum.each(maybe_mark_linked_order_paid(paid_invoice), fn {fun, arg} ->
+            apply(Events, fun, [arg])
+          end)
+
           {:ok, paid_invoice}
 
         error ->
@@ -4582,22 +4596,23 @@ defmodule PhoenixKitBilling do
           |> Invoice.paid_changeset(receipt_number)
           |> repo().update!()
 
-        maybe_mark_linked_order_paid(paid)
+        order_broadcasts = maybe_mark_linked_order_paid(paid)
         InvoiceEvents.enqueue(:paid, paid)
         # A provider-confirmed payment arrives HERE (webhooks call
         # record_payment/3), and never used to announce the invoice as paid
         # at all — only the admin "Mark paid" action did.
-        [{:broadcast_invoice_paid, paid}]
+        [{:broadcast_invoice_paid, paid} | order_broadcasts]
       else
         []
       end
 
     if Decimal.negative?(amount) do
-      handle_refund_transaction(invoice.uuid)
+      order_broadcasts = handle_refund_transaction(invoice.uuid)
       InvoiceEvents.enqueue(:refunded, get_invoice!(invoice.uuid))
+      became_paid ++ order_broadcasts
+    else
+      became_paid
     end
-
-    became_paid
   end
 
   @doc """
@@ -5342,7 +5357,9 @@ defmodule PhoenixKitBilling do
 
   defp resolve_subscription_type_uuid(_), do: nil
 
-  defp maybe_mark_linked_order_paid(%{order_uuid: nil}), do: :ok
+  # Like refunds, linked order transitions are silent inside the payment
+  # transaction. Both callers publish the returned events after it commits.
+  defp maybe_mark_linked_order_paid(%{order_uuid: nil}), do: []
 
   defp maybe_mark_linked_order_paid(%{order_uuid: order_uuid} = invoice) do
     # Get the primary payment method from the invoice's transactions
@@ -5351,34 +5368,43 @@ defmodule PhoenixKitBilling do
 
     case get_order!(order_uuid) do
       %Order{status: "confirmed"} = order ->
-        mark_order_paid(order, payment_method: payment_method)
+        order_paid_broadcasts(order, payment_method)
 
-      %Order{status: "draft"} = order ->
-        # Auto-confirm draft order, then mark as paid
-        with {:ok, confirmed_order} <- confirm_order(order) do
-          mark_order_paid(confirmed_order, payment_method: payment_method)
-        end
+      %Order{status: status} = order when status in ["draft", "pending"] ->
+        case confirm_order_transition(order) do
+          {:ok, confirmed} ->
+            paid_broadcasts = order_paid_broadcasts(confirmed, payment_method)
+            [{:broadcast_order_confirmed, confirmed} | paid_broadcasts]
 
-      %Order{status: "pending"} = order ->
-        # Auto-confirm pending order, then mark as paid
-        with {:ok, confirmed_order} <- confirm_order(order) do
-          mark_order_paid(confirmed_order, payment_method: payment_method)
+          _ ->
+            []
         end
 
       _ ->
-        :ok
+        []
     end
   end
 
-  defp maybe_mark_linked_order_refunded(%{order_uuid: nil}), do: :ok
+  defp order_paid_broadcasts(order, payment_method) do
+    case pay_order(order, payment_method: payment_method) do
+      {:ok, paid} -> [{:broadcast_order_paid, paid}]
+      _ -> []
+    end
+  end
+
+  # Returns the broadcasts to send once the surrounding transaction commits.
+  defp maybe_mark_linked_order_refunded(%{order_uuid: nil}), do: []
 
   defp maybe_mark_linked_order_refunded(%{order_uuid: order_uuid}) do
     case get_order!(order_uuid) do
       %Order{status: "paid"} = order ->
-        mark_order_refunded(order)
+        case refund_order(order) do
+          {:ok, refunded} -> [{:broadcast_order_refunded, refunded}]
+          _ -> []
+        end
 
       _ ->
-        :ok
+        []
     end
   end
 
@@ -5393,6 +5419,8 @@ defmodule PhoenixKitBilling do
       |> repo().update!()
 
       maybe_mark_linked_order_refunded(invoice)
+    else
+      []
     end
   end
 

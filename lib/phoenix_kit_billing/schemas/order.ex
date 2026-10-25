@@ -508,8 +508,15 @@ defmodule PhoenixKitBilling.Order do
   defp bump_revision(changeset) do
     uuid = changeset.data.uuid
 
+    # NO KEY UPDATE: enough to serialize the counting (it conflicts with itself
+    # and with the UPDATE that follows), and unlike FOR UPDATE it does not
+    # conflict with the FOR KEY SHARE an invoice insert takes on the order.
     stored =
-      from(o in __MODULE__, where: o.uuid == ^uuid, lock: "FOR UPDATE", select: o.metadata)
+      from(o in __MODULE__,
+        where: o.uuid == ^uuid,
+        lock: "FOR NO KEY UPDATE",
+        select: o.metadata
+      )
       |> changeset.repo.one()
       |> Kernel.||(%{})
 

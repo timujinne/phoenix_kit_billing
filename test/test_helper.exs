@@ -203,4 +203,14 @@ user_menu_exclude =
     [:requires_core_user_menu]
   end
 
-ExUnit.start(exclude: i18n_exclude ++ integration_exclude ++ user_menu_exclude)
+# `migrations_build_alone_test.exs` uses core's
+# `PhoenixKit.TestSupport.ModuleChainCheck`, which the first core release after
+# 2.64.1 ships; against an older core in `deps/` it is excluded.
+chain_check_exclude =
+  if Code.ensure_loaded?(PhoenixKit.TestSupport.ModuleChainCheck),
+    do: [],
+    else: [:requires_module_chain_check]
+
+ExUnit.start(
+  exclude: i18n_exclude ++ integration_exclude ++ user_menu_exclude ++ chain_check_exclude
+)

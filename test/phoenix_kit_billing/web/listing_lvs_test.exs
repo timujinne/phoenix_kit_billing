@@ -73,15 +73,7 @@ defmodule PhoenixKitBilling.Web.ListingLvsTest do
   end
 
   describe "Subscriptions" do
-    # SKIPPED: the Subscriptions LV's `mount` -> `list_subscriptions/1` issues
-    # a SELECT that includes `subscription_type_uuid`, a column the
-    # `phoenix_kit_subscriptions` table on this test DB does not have (see the
-    # detailed note in test/phoenix_kit_billing/integration/context_test.exs —
-    # core's versioned migrations never ADD that column on a from-scratch
-    # build). The LV therefore raises `Postgrex.Error (undefined_column)`
-    # before it can render. Re-enable once core ships the column.
-    @tag :skip
-    test "mounts and shows the empty state (BLOCKED: missing subscription_type_uuid column)", %{
+    test "mounts and shows the empty state", %{
       conn: conn
     } do
       {:ok, _view, html} = live(conn, "/en/admin/billing/subscriptions")

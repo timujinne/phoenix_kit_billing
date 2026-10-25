@@ -180,6 +180,32 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
       refute_receive {:order_refunded, _}
     end
 
+    test "record_refund/3 broadcasts :order_refunded once, and only for a full refund",
+         %{user: user} do
+      {:ok, order} = create_basic_order(user)
+      {:ok, invoice} = Billing.create_invoice_from_order(order)
+
+      {:ok, invoice, :skipped} =
+        Billing.send_invoice(invoice, to_email: user.email, send_email: false)
+
+      {:ok, _payment} = Billing.record_payment(invoice, %{amount: invoice.total}, nil)
+      assert Billing.get_order!(order.uuid).status == "paid"
+
+      Events.subscribe_orders()
+      paid_invoice = Billing.get_invoice!(invoice.uuid)
+
+      {:ok, _partial} = Billing.record_refund(paid_invoice, %{amount: "1.00"}, nil)
+      refute_receive {:order_refunded, _}
+
+      remaining = Billing.get_invoice!(invoice.uuid)
+      {:ok, _rest} = Billing.record_refund(remaining, %{amount: remaining.paid_amount}, nil)
+
+      assert Billing.get_order!(order.uuid).status == "refunded"
+      assert_receive {:order_refunded, %{uuid: uuid, status: "refunded"}}
+      assert uuid == order.uuid
+      refute_receive {:order_refunded, _}
+    end
+
     test "cancel_order/2 records reason", %{user: user} do
       {:ok, order} = create_basic_order(user)
       assert {:ok, cancelled} = Billing.cancel_order(order, "changed mind")
@@ -378,21 +404,10 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
   end
 
   describe "subscriptions" do
-    # NOTE: the subscription create/update/status-transition tests that
-    # persist a `Subscription` are SKIPPED here because the
-    # `phoenix_kit_subscriptions` table built by core's versioned migrations
-    # on this test DB is MISSING the `subscription_type_uuid` column that the
-    # `PhoenixKitBilling.Subscription` schema declares. No core migration adds
-    # that column via ADD COLUMN — it only exists via V65's conditional
-    # RENAME of `plan_uuid` (which V33 never creates as `plan_uuid`; V33 uses
-    # an integer `plan_id`). On a from-scratch `ensure_current/2` build the
-    # column therefore never materializes, so every `Subscription` insert
-    # raises `Postgrex.Error (undefined_column) subscription_type_uuid`.
-    #
-    # This is a core migration-chain gap (not a billing-module bug and not
-    # fixable from test code). Once core ships the column (or the marker is
-    # repaired), drop the `@tag :skip` markers below. The non-persisting
-    # error paths are exercised unconditionally.
+    # These tests were `@tag :skip` while a from-scratch build of
+    # `phoenix_kit_subscriptions` lacked `subscription_type_uuid`. It exists
+    # (core's chain creates it), so they run; the non-persisting error paths
+    # below never needed it.
 
     test "create_subscription/2 with unknown type returns error (no insert)" do
       user = fixture_user()
@@ -405,8 +420,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
       assert Billing.get_subscription("not-a-uuid") == nil
     end
 
-    @tag :skip
-    test "create_subscription/2 with no trial is active (BLOCKED: missing column)" do
+    test "create_subscription/2 with no trial is active" do
       user = fixture_user()
 
       {:ok, type} =
@@ -422,8 +436,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
       assert sub.status == "active"
     end
 
-    @tag :skip
-    test "status transitions: cancel / pause / resume (BLOCKED: missing column)" do
+    test "status transitions: cancel / pause / resume" do
       user = fixture_user()
 
       {:ok, type} =
@@ -442,8 +455,7 @@ defmodule PhoenixKitBilling.Integration.ContextTest do
       assert cancelled.status == "cancelled"
     end
 
-    @tag :skip
-    test "edit-save persists a changed payment method (BLOCKED: missing column)" do
+    test "edit-save persists a changed payment method" do
       # Mirrors the SubscriptionForm edit-save path: when an admin changes
       # the payment method (and optionally the type) in edit mode, the new
       # `payment_method_uuid` must persist via `update_subscription/2`

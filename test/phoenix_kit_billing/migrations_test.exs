@@ -42,7 +42,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
     alias PhoenixKit.Migrations.Postgres.Helpers
 
     test "current_version/0 and version_table/0" do
-      assert Migrations.current_version() == 5
+      assert Migrations.current_version() == 6
       assert Migrations.version_table() == "phoenix_kit_payment_provider_configs"
     end
 
@@ -220,7 +220,7 @@ defmodule PhoenixKitBilling.MigrationsTest do
       statements = Migrations.up_statements()
 
       assert List.last(statements) ==
-               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:5'",
+               "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'",
              "the marker must be stamped after the DDL it certifies, not before"
     end
 
@@ -376,10 +376,16 @@ defmodule PhoenixKitBilling.MigrationsTest do
                    "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:4'"
                  ]
 
-      # target 5 == current_version: nothing to undo, marker only.
+      # target 5: V6 undone — it adopted tables, so nothing to drop, marker only.
       assert Migrations.down_statements("billing_alt", 5) ==
                [
                  "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:5'"
+               ]
+
+      # target 6 == current_version: nothing to undo, marker only.
+      assert Migrations.down_statements("billing_alt", 6) ==
+               [
+                 "COMMENT ON TABLE billing_alt.phoenix_kit_payment_provider_configs IS 'pkb_schema:6'"
                ]
     end
 

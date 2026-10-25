@@ -13,62 +13,65 @@ defmodule PhoenixKitBilling.Web.PaymentConfirmationPrint do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitBilling, as: Billing
   alias PhoenixKitBilling.DocumentBranding
+  alias PhoenixKitBilling.Paths
   alias PhoenixKitBilling.Transaction
   alias PhoenixKitBilling.Web.Authz
 
   @impl true
-  def mount(params, session, socket) do
-    # These render a customer's invoice - name, address, line items. The
-    # route only requires the base "billing" key, so without this an
-    # operator who may only touch provider settings could open any
-    # customer's paperwork by URL.
+  def mount(_params, _session, socket) do
     Authz.authorize_mount(socket, :manage_invoices, fn ->
-      do_mount(params, session, socket)
+      {:ok, socket, layout: false}
     end)
   end
 
-  defp do_mount(
-         %{"invoice_uuid" => invoice_uuid, "transaction_uuid" => transaction_uuid},
-         _session,
-         socket
-       ) do
-    with true <- Billing.enabled?(),
-         %{} = invoice <- Billing.get_invoice(invoice_uuid, preload: [:order, :user]),
-         %Transaction{} = transaction <- Billing.get_transaction(transaction_uuid),
-         true <- Transaction.payment?(transaction) do
-      mount_payment_confirmation(socket, invoice, transaction)
+  @impl true
+  def handle_params(
+        %{"invoice_uuid" => invoice_uuid, "transaction_uuid" => transaction_uuid},
+        _url,
+        socket
+      ) do
+    if Billing.enabled?() do
+      load_document(socket, invoice_uuid, transaction_uuid)
     else
-      false ->
-        {:ok,
-         socket
-         |> put_flash(:error, gettext("Billing module is not enabled"))
-         |> push_navigate(to: Routes.path("/admin"))}
-
-      nil ->
-        error_msg =
-          if Billing.get_invoice(invoice_uuid) == nil,
-            do: gettext("Invoice not found"),
-            else: gettext("Transaction not found")
-
-        redirect_path =
-          if Billing.get_invoice(invoice_uuid) == nil,
-            do: Routes.path("/admin/billing/invoices"),
-            else: Routes.path("/admin/billing/invoices/#{invoice_uuid}")
-
-        {:ok,
-         socket
-         |> put_flash(:error, error_msg)
-         |> push_navigate(to: redirect_path)}
-
-      %Transaction{} ->
-        {:ok,
-         socket
-         |> put_flash(:error, gettext("Transaction is not a payment"))
-         |> push_navigate(to: Routes.path("/admin/billing/invoices/#{invoice_uuid}"))}
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("Billing module is not enabled"))
+       |> push_navigate(to: Routes.path("/admin"))}
     end
   end
 
-  defp mount_payment_confirmation(socket, invoice, transaction) do
+  defp load_document(socket, invoice_uuid, transaction_uuid) do
+    case Billing.get_invoice(invoice_uuid, preload: [:order, :user]) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Invoice not found"))
+         |> push_navigate(to: Paths.invoices())}
+
+      invoice ->
+        invoice_uuid = invoice.uuid
+
+        case Billing.get_transaction(transaction_uuid) do
+          %Transaction{invoice_uuid: ^invoice_uuid} = transaction ->
+            if Transaction.payment?(transaction) do
+              {:noreply, assign_document(socket, invoice, transaction)}
+            else
+              {:noreply,
+               socket
+               |> put_flash(:error, gettext("Transaction is not a payment"))
+               |> push_navigate(to: Paths.invoice_detail(invoice_uuid))}
+            end
+
+          _ ->
+            {:noreply,
+             socket
+             |> put_flash(:error, gettext("Transaction not found"))
+             |> push_navigate(to: Paths.invoice_detail(invoice_uuid))}
+        end
+    end
+  end
+
+  defp assign_document(socket, invoice, transaction) do
     project_title = Settings.get_project_title()
     company_info = Billing.get_company_info()
     confirmation_number = generate_confirmation_number(transaction)
@@ -90,12 +93,7 @@ defmodule PhoenixKitBilling.Web.PaymentConfirmationPrint do
       |> assign(:footer_text, DocumentBranding.footer_text())
       |> assign(:payment_context, payment_context)
 
-    {:ok, socket, layout: false}
-  end
-
-  @impl true
-  def handle_params(_params, _url, socket) do
-    {:noreply, socket}
+    socket
   end
 
   defp generate_confirmation_number(transaction) do

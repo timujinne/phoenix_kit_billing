@@ -1,8 +1,91 @@
+## Unreleased
+
+### Changed
+
+- The migration chain is now V6. V2 and V3 alter `phoenix_kit_currencies` and
+  `phoenix_kit_orders`, which V4 creates, so on a database without core's copy
+  of those tables the chain failed at V2 before adopting anything. V6 emits the
+  base `CREATE TABLE IF NOT EXISTS` of those two tables between V1 and V2 (a
+  no-op wherever core created them), carrying core's seed rows (the EUR/GBP/USD
+  currencies and the bank transfer, cash on delivery, PayPal and card payment
+  options) only when it creates the table itself, never over a host's own rows.
+  Published versions' statements are untouched, and `down/1` never drops a
+  table. With it the chain builds all eleven tables without core
+  (`test/phoenix_kit_billing/integration/migrations_build_alone_test.exs`, core's
+  `ModuleChainCheck`). See core's
+  `dev_docs/plans/2026-10-25-module-table-ownership.md`.
+
+### Fixed
+
+- Four subscription tests no longer `@tag :skip`: `subscription_type_uuid`
+  exists on a from-scratch build, so the documented "core chain gap" is gone.
+  The matching AGENTS.md landmine and TODO are removed.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## 0.23.0 - 2026-10-24
+
+An order revision and sync mark for external systems (PR #54), locked order
+transitions and refund bounds (PR #56), an `:order_refunded` event (PR #57)
+and working payment confirmation links (PR #58).
+
+### Added
+
+- **Order revision and external sync mark.** `PhoenixKitBilling.Order.revision/1`
+  counts the changes an external system cares about (status, amounts, order
+  number, buyer, the confirmation/payment/cancellation times), bumped under the
+  order row lock. `PhoenixKitBilling.put_order_sync/2` records an external
+  system's mark (`state: "synced" | "failed"`, the `revision` it took, and
+  optional `external_id`, `external_number`, `external_status`, `error`) in
+  `metadata["sync"]` without touching the order or broadcasting; it returns
+  `{:error, :stale_revision}` when the order changed since that revision, and
+  refuses a mark with no revision. `Order.sync/1` reports the mark, or
+  `"pending"` once the order changes again, and `Order.where_sync/2`
+  narrows a query to `:pending`, `:synced` or `:any` orders. (PR #54)
+- **`:order_refunded` event** on `phoenix_kit:billing:orders` and the per-user
+  orders topic (`Events.broadcast_order_refunded/1`), sent when an order is
+  marked refunded, including by the refund that zeroes its invoice. The admin
+  order list and detail pages refresh on it. (PR #57)
+
+### Changed
+
+- `confirm_order/1`, `mark_order_paid/2`, `mark_order_refunded/1` and
+  `cancel_order/2` lock the order row and check the transition against the
+  stored status, so a payment and a cancellation racing on the same order can
+  no longer both succeed. Refusals are returned, not raised. The lock is
+  `FOR NO KEY UPDATE`, so it does not block an invoice being created for the
+  order. (PR #56)
+- A refund larger than the invoice's locked `paid_amount` returns
+  `{:error, :exceeds_paid_amount}` instead of raising
+  `Ecto.InvalidChangesetError`. (PR #56)
+- Order events raised by a payment or refund (`:order_confirmed`,
+  `:order_paid`, `:order_refunded`) are broadcast after the transaction
+  commits, alongside the invoice and transaction events, so a listener that
+  re-reads the order sees the new state and a rolled-back payment announces
+  nothing. The standalone order functions still broadcast as before.
+- The Gettext backend compiles one module per locale and domain, so the
+  catalogues compile in parallel instead of holding up dependent apps.
+  Lookups are unchanged. (PR #53)
+- Dependencies refreshed to `phoenix_kit` 2.64.1. The `phoenix_kit`
+  requirement is unchanged.
+
+### Fixed
+
+- **"Print Payment Confirmation" on the invoice page and "View payment
+  confirmation online" in the email led to a 404**; both now link to the
+  `payment-confirmation` route. (PR #58)
+- The payment confirmation and credit note print pages refuse a transaction
+  that belongs to another invoice (it used to print one invoice's customer
+  next to another's payment), report "Transaction is not a payment" / "is not
+  a refund" instead of claiming billing is disabled, and re-validate when
+  navigated to another invoice.
+- A refund applied to an invoice whose `paid_amount` the caller held stale
+  could leave the column out of step with the ledger; it is now applied to the
+  locked invoice.
 
 ## 0.22.0 - 2026-10-13
 

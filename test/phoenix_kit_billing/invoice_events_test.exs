@@ -62,6 +62,52 @@ defmodule PhoenixKitBilling.InvoiceEventsTest do
     do: %{"event" => event, "invoice_uuid" => invoice.uuid, "handler" => inspect(Handler)}
 
   describe "enqueued with the change that caused it" do
+    test "automatic order confirmation and payment are broadcast after the transaction", %{
+      invoice: invoice
+    } do
+      {:ok, order} =
+        Billing.create_order(invoice.user_uuid, %{
+          "total" => Decimal.new("30.00"),
+          "currency" => "EUR",
+          "billing_snapshot" => %{"email" => "payer@example.com"}
+        })
+
+      {:ok, invoice} = invoice |> Ecto.Changeset.change(order_uuid: order.uuid) |> Repo.update()
+      Events.subscribe_user_orders(order.user_uuid)
+      observe_order_broadcasts_at_enqueue()
+
+      assert {:ok, _payment} = Billing.record_payment(invoice, %{amount: "30.00"}, nil)
+
+      assert_receive {:order_events_at_enqueue, []}
+      assert_receive {:order_confirmed, %{uuid: uuid, status: "confirmed"}}
+      assert uuid == order.uuid
+      assert_receive {:order_paid, %{uuid: ^uuid, status: "paid", payment_method: "bank"}}
+      refute_receive {:order_paid, %{uuid: ^uuid}}
+    end
+
+    test "a linked order refund is broadcast after the transaction", %{invoice: invoice} do
+      {:ok, order} =
+        Billing.create_order(invoice.user_uuid, %{
+          "total" => Decimal.new("30.00"),
+          "currency" => "EUR",
+          "billing_snapshot" => %{"email" => "payer@example.com"}
+        })
+
+      {:ok, invoice} = invoice |> Ecto.Changeset.change(order_uuid: order.uuid) |> Repo.update()
+      {:ok, _payment} = Billing.record_payment(invoice, %{amount: "30.00"}, nil)
+
+      Events.subscribe_user_orders(order.user_uuid)
+      observe_order_broadcasts_at_enqueue()
+
+      assert {:ok, _refund} =
+               Billing.record_refund(Billing.get_invoice!(invoice.uuid), %{amount: "30.00"}, nil)
+
+      assert_receive {:order_events_at_enqueue, []}
+      assert_receive {:order_refunded, %{uuid: uuid, status: "refunded"}}
+      assert uuid == order.uuid
+      refute_receive {:order_refunded, %{uuid: ^uuid}}
+    end
+
     test "the admin Mark paid enqueues :paid for every handler", %{invoice: invoice} do
       {:ok, _} = Billing.mark_invoice_paid(invoice)
       assert_enqueued(worker: InvoiceEventWorker, args: args("paid", invoice))
@@ -111,6 +157,37 @@ defmodule PhoenixKitBilling.InvoiceEventsTest do
       {:ok, _} = Billing.mark_invoice_paid(invoice)
 
       assert length(all_enqueued(worker: InvoiceEventWorker)) == 2
+    end
+  end
+
+  # Oban inserts the durable event before the billing transaction returns.
+  # Inspect the subscriber's mailbox synchronously at that insert, so a test
+  # cannot pass just because a pre-commit event was read after the call returned.
+  defp observe_order_broadcasts_at_enqueue do
+    handler_id = {__MODULE__, make_ref()}
+    subscriber = self()
+
+    :telemetry.attach(
+      handler_id,
+      [:phoenix_kit_billing, :test, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if self() == subscriber and String.starts_with?(metadata.query, "INSERT") and
+             String.contains?(metadata.query, "oban_jobs") do
+          send(subscriber, {:order_events_at_enqueue, drain_order_events()})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp drain_order_events(events \\ []) do
+    receive do
+      {event, _order} = message when event in [:order_confirmed, :order_paid, :order_refunded] ->
+        drain_order_events([message | events])
+    after
+      0 -> Enum.reverse(events)
     end
   end
 

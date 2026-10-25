@@ -158,12 +158,38 @@ defmodule PhoenixKitBilling.Migrations do
   already assume the table pre-exists, independently of V4); V4 does not
   introduce it, it only inherits it for two of its ten tables. Fixing it
   would mean reordering V1-V3, which are published and frozen — left as
-  a known limitation rather than silently ignored.
+  a known limitation rather than silently ignored. **Closed by V6 below**,
+  which emits the base shape of those two tables ahead of V2 without touching
+  the published versions.
 
   `down/1` to below V4 never drops any of the ten tables — same
   invariant as V1/V2/V3, and, like V1, V4 changes no shape of its own
   (it only creates what core's baseline already creates), so there is
   nothing for `down/1` to undo beyond the marker.
+
+  ## V6 — the tables V2 and V3 alter, created before them
+
+  The "known ordering gap" in V4's section above is closed here. V2 and V3
+  alter `phoenix_kit_currencies` and `phoenix_kit_orders`, but V4 creates them,
+  so on a database without core's copy V2's `UPDATE` failed on a missing table
+  and nothing was adopted. V6 emits the base `CREATE TABLE IF NOT EXISTS` of
+  those two tables (the same text V4 uses — shared, not copied) **between V1
+  and V2**, ahead of the first statement that touches them. The version is
+  still the next number; shipped versions' own statements are not edited, and
+  a target below 6 builds the chain as it was. On every existing install the
+  tables are there and V6 does nothing.
+
+  Core's V135 also seeds rows into `phoenix_kit_currencies` (EUR default, GBP,
+  USD) and `phoenix_kit_payment_options` (bank_transfer, cod, paypal, stripe).
+  V6 carries them, but only as part of creating the table (one `DO` block each,
+  guarded by `to_regclass`), so they appear on a database this chain builds and
+  never over a host's own rows. Re-running them with `ON CONFLICT DO NOTHING`
+  would restore currencies or options an operator deleted, and the seeded EUR
+  default would collide with `phoenix_kit_currencies_default_uidx` on a host
+  whose default is another currency. `phoenix_kit_payment_options` is created in
+  the same block (V4 then finds it).
+
+  `down/1` below V6 only moves the marker and never drops a table.
 
   ## V5 — a payer need not have an account
 
@@ -192,7 +218,7 @@ defmodule PhoenixKitBilling.Migrations do
 
   use Ecto.Migration
 
-  @current_version 5
+  @current_version 6
   @marker_prefix "pkb_schema:"
   @version_table "phoenix_kit_payment_provider_configs"
 
@@ -331,6 +357,9 @@ defmodule PhoenixKitBilling.Migrations do
         "CREATE UNIQUE INDEX IF NOT EXISTS #{@version_table}_uuid_idx ON #{p}#{@version_table} USING btree (uuid)"
       ]
 
+      # V6: the tables V2 and V3 alter, created before them (see the moduledoc).
+      v6 = if target >= 6, do: v6_statements(p), else: []
+
       v2 =
         if target >= 2 do
           [
@@ -381,10 +410,51 @@ defmodule PhoenixKitBilling.Migrations do
       v5 = if target >= 5, do: v5_statements(prefix, p), else: []
 
       v1 ++
+        v6 ++
         v2 ++
         v3 ++
         v4 ++ v5 ++ ["COMMENT ON TABLE #{p}#{@version_table} IS '#{@marker_prefix}#{target}'"]
     end
+  end
+
+  # V6 — the base shape of the tables V2 and V3 alter, emitted between V1 and
+  # V2 (see the moduledoc). Each statement is a no-op wherever core created the
+  # table. Core's V135 also seeds rows into two of them; the seed is part of
+  # creating the table here, in the same `DO` block, so it runs only when this
+  # chain creates the table — never over a host's own currencies or payment
+  # options, which it would otherwise restore after they were deleted (or
+  # collide with, as a second default currency).
+  defp v6_statements(p) do
+    [
+      """
+      DO $$
+      BEGIN
+        IF to_regclass('#{p}phoenix_kit_currencies') IS NULL THEN
+          #{currencies_table(p)};
+          INSERT INTO #{p}phoenix_kit_currencies ("code", "decimal_places", "enabled", "exchange_rate", "is_default", "name", "sort_order", "symbol", "inserted_at", "updated_at")
+          VALUES ('EUR', 2, TRUE, '1.000000', TRUE, 'Euro', 1, '€', NOW(), NOW()),
+                 ('GBP', 2, TRUE, '0.850000', FALSE, 'British Pound', 3, '£', NOW(), NOW()),
+                 ('USD', 2, TRUE, '1.100000', FALSE, 'US Dollar', 2, '$', NOW(), NOW());
+        END IF;
+      END
+      $$
+      """,
+      orders_table(p),
+      """
+      DO $$
+      BEGIN
+        IF to_regclass('#{p}phoenix_kit_payment_options') IS NULL THEN
+          #{payment_options_table(p)};
+          INSERT INTO #{p}phoenix_kit_payment_options ("code", "active", "description", "icon", "instructions", "name", "position", "provider", "requires_billing_profile", "settings", "type")
+          VALUES ('bank_transfer', FALSE, 'Pay via bank transfer', 'hero-building-library', 'You will receive invoice with bank details after order confirmation.', 'Bank Transfer', 2, NULL, TRUE, '{}'::jsonb, 'offline'),
+                 ('cod', TRUE, 'Pay when you receive your order', 'hero-banknotes', 'Payment will be collected upon delivery. Please have the exact amount ready.', 'Cash on Delivery', 1, NULL, TRUE, '{}'::jsonb, 'offline'),
+                 ('paypal', FALSE, 'Pay securely with your PayPal account', 'hero-credit-card', NULL, 'PayPal', 4, 'paypal', FALSE, '{}'::jsonb, 'online'),
+                 ('stripe', FALSE, 'Secure payment with credit or debit card', 'hero-credit-card', NULL, 'Pay with Card', 3, 'stripe', FALSE, '{}'::jsonb, 'online');
+        END IF;
+      END
+      $$
+      """
+    ]
   end
 
   # V5 — a payer need not have an account (see the moduledoc). Each step is
@@ -441,6 +511,79 @@ defmodule PhoenixKitBilling.Migrations do
     ]
   end
 
+  defp currencies_table(p) do
+    """
+    CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_currencies (
+      "code" character varying(3) NOT NULL,
+      "name" character varying(255) NOT NULL,
+      "symbol" character varying(5) NOT NULL,
+      "decimal_places" integer DEFAULT 2 NOT NULL,
+      "is_default" boolean DEFAULT false NOT NULL,
+      "enabled" boolean DEFAULT true NOT NULL,
+      "exchange_rate" numeric(15,6) DEFAULT 1 NOT NULL,
+      "sort_order" integer DEFAULT 0 NOT NULL,
+      "inserted_at" timestamp with time zone NOT NULL,
+      "updated_at" timestamp with time zone NOT NULL,
+      "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
+    )
+    """
+  end
+
+  defp orders_table(p) do
+    """
+    CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_orders (
+      "order_number" character varying(30) NOT NULL,
+      "status" character varying(20) DEFAULT 'draft'::character varying NOT NULL,
+      "payment_method" character varying(20),
+      "line_items" jsonb DEFAULT '[]'::jsonb NOT NULL,
+      "subtotal" numeric(15,2) DEFAULT 0 NOT NULL,
+      "tax_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+      "tax_rate" numeric(5,4) DEFAULT 0 NOT NULL,
+      "discount_amount" numeric(15,2) DEFAULT 0 NOT NULL,
+      "discount_code" character varying(50),
+      "total" numeric(15,2) NOT NULL,
+      "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
+      "billing_snapshot" jsonb DEFAULT '{}'::jsonb,
+      "notes" text,
+      "internal_notes" text,
+      "metadata" jsonb DEFAULT '{}'::jsonb,
+      "confirmed_at" timestamp with time zone,
+      "paid_at" timestamp with time zone,
+      "cancelled_at" timestamp with time zone,
+      "inserted_at" timestamp with time zone NOT NULL,
+      "updated_at" timestamp with time zone NOT NULL,
+      "checkout_session_id" character varying(255),
+      "checkout_url" text,
+      "checkout_expires_at" timestamp with time zone,
+      "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+      "user_uuid" uuid,
+      "billing_profile_uuid" uuid,
+      "payment_option_uuid" uuid
+    )
+    """
+  end
+
+  defp payment_options_table(p) do
+    """
+    CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_payment_options (
+      "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
+      "name" character varying(255) NOT NULL,
+      "code" character varying(50) NOT NULL,
+      "type" character varying(20) DEFAULT 'offline'::character varying NOT NULL,
+      "provider" character varying(50),
+      "description" text,
+      "instructions" text,
+      "icon" character varying(100) DEFAULT 'hero-banknotes'::character varying,
+      "active" boolean DEFAULT false,
+      "position" integer DEFAULT 0,
+      "requires_billing_profile" boolean DEFAULT true,
+      "settings" jsonb DEFAULT '{}'::jsonb,
+      "inserted_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+    """
+  end
+
   # V4 — adoption of the remaining ten core-baseline tables. `prefix` and
   # `p` are the already-validated forms `up_statements/2` derived — this
   # is a private helper of that single call site, not a second entry
@@ -454,21 +597,7 @@ defmodule PhoenixKitBilling.Migrations do
     pn = if prefix == "public", do: "", else: "#{prefix}_"
 
     tables = [
-      """
-      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_currencies (
-        "code" character varying(3) NOT NULL,
-        "name" character varying(255) NOT NULL,
-        "symbol" character varying(5) NOT NULL,
-        "decimal_places" integer DEFAULT 2 NOT NULL,
-        "is_default" boolean DEFAULT false NOT NULL,
-        "enabled" boolean DEFAULT true NOT NULL,
-        "exchange_rate" numeric(15,6) DEFAULT 1 NOT NULL,
-        "sort_order" integer DEFAULT 0 NOT NULL,
-        "inserted_at" timestamp with time zone NOT NULL,
-        "updated_at" timestamp with time zone NOT NULL,
-        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
-      )
-      """,
+      currencies_table(p),
       """
       CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_subscription_types (
         "name" character varying(255) NOT NULL,
@@ -488,24 +617,7 @@ defmodule PhoenixKitBilling.Migrations do
         "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL
       )
       """,
-      """
-      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_payment_options (
-        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
-        "name" character varying(255) NOT NULL,
-        "code" character varying(50) NOT NULL,
-        "type" character varying(20) DEFAULT 'offline'::character varying NOT NULL,
-        "provider" character varying(50),
-        "description" text,
-        "instructions" text,
-        "icon" character varying(100) DEFAULT 'hero-banknotes'::character varying,
-        "active" boolean DEFAULT false,
-        "position" integer DEFAULT 0,
-        "requires_billing_profile" boolean DEFAULT true,
-        "settings" jsonb DEFAULT '{}'::jsonb,
-        "inserted_at" timestamp with time zone DEFAULT now() NOT NULL,
-        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
-      )
-      """,
+      payment_options_table(p),
       """
       CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_billing_profiles (
         "type" character varying(20) DEFAULT 'individual'::character varying NOT NULL,
@@ -553,37 +665,7 @@ defmodule PhoenixKitBilling.Migrations do
         "user_uuid" uuid NOT NULL
       )
       """,
-      """
-      CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_orders (
-        "order_number" character varying(30) NOT NULL,
-        "status" character varying(20) DEFAULT 'draft'::character varying NOT NULL,
-        "payment_method" character varying(20),
-        "line_items" jsonb DEFAULT '[]'::jsonb NOT NULL,
-        "subtotal" numeric(15,2) DEFAULT 0 NOT NULL,
-        "tax_amount" numeric(15,2) DEFAULT 0 NOT NULL,
-        "tax_rate" numeric(5,4) DEFAULT 0 NOT NULL,
-        "discount_amount" numeric(15,2) DEFAULT 0 NOT NULL,
-        "discount_code" character varying(50),
-        "total" numeric(15,2) NOT NULL,
-        "currency" character varying(3) DEFAULT 'EUR'::character varying NOT NULL,
-        "billing_snapshot" jsonb DEFAULT '{}'::jsonb,
-        "notes" text,
-        "internal_notes" text,
-        "metadata" jsonb DEFAULT '{}'::jsonb,
-        "confirmed_at" timestamp with time zone,
-        "paid_at" timestamp with time zone,
-        "cancelled_at" timestamp with time zone,
-        "inserted_at" timestamp with time zone NOT NULL,
-        "updated_at" timestamp with time zone NOT NULL,
-        "checkout_session_id" character varying(255),
-        "checkout_url" text,
-        "checkout_expires_at" timestamp with time zone,
-        "uuid" uuid DEFAULT #{p}uuid_generate_v7() NOT NULL,
-        "user_uuid" uuid,
-        "billing_profile_uuid" uuid,
-        "payment_option_uuid" uuid
-      )
-      """,
+      orders_table(p),
       """
       CREATE TABLE IF NOT EXISTS #{p}phoenix_kit_invoices (
         "invoice_number" character varying(30) NOT NULL,
