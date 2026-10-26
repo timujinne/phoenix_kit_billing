@@ -61,6 +61,15 @@
               <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Cancel")}
             </button>
           <% end %>
+          <%= if @can_manage_orders and @order.status == "cancelled" do %>
+            <button
+              id="reinstate-order-button"
+              phx-click="open_reinstate_modal"
+              class="btn btn-warning btn-outline btn-sm"
+            >
+              <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Reinstate order")}
+            </button>
+          <% end %>
           <%= if @can_manage_orders and Order.trashable?(@order) and
                    not Enum.any?(@invoices, &PhoenixKitBilling.Invoice.open?/1) do %>
             <button
@@ -417,6 +426,48 @@
         </form>
       </div>
       <div class="modal-backdrop" phx-click="close_cancel_modal"></div>
+    </div>
+  <% end %>
+
+  <%!-- Reinstate Order Modal --%>
+  <%= if @show_reinstate_modal do %>
+    <div id="reinstate-order-modal" class="modal modal-open">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">{gettext("Reinstate order")}</h3>
+        <p class="py-2 text-base-content/60">
+          {gettext("Reinstate order %{number}?", number: @order.order_number)}
+        </p>
+        <p class="text-sm text-base-content/60">
+          {gettext(
+            "The order goes back to the status it had before it was cancelled. If one of its invoices was paid meanwhile, it is marked as paid."
+          )}
+        </p>
+
+        <form id="reinstate-order-form" phx-submit="reinstate_order">
+          <div class="fieldset mt-4">
+            <label class="label">
+              <span class="fieldset-legend">{gettext("Reason (optional)")}</span>
+            </label>
+            <textarea
+              name="reason"
+              rows="3"
+              maxlength={PhoenixKitBilling.reason_max_length()}
+              class="textarea w-full"
+              placeholder={gettext("Why is this order being reinstated?")}
+            ></textarea>
+          </div>
+
+          <div class="modal-action">
+            <button type="button" phx-click="close_reinstate_modal" class="btn">
+              {gettext("Back")}
+            </button>
+            <button type="submit" class="btn btn-warning">
+              <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Reinstate order")}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="modal-backdrop" phx-click="close_reinstate_modal"></div>
     </div>
   <% end %>
 

@@ -4984,3 +4984,40 @@ msgstr "Cannot be voided: it has payments. Refund them instead."
 #, elixir-autogen, elixir-format
 msgid "Why is this order being moved to the trash?"
 msgstr "Why is this order being moved to the trash?"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:70
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:436
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:465
+#, elixir-autogen, elixir-format
+msgid "Reinstate order"
+msgstr "Reinstate order"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:438
+#, elixir-autogen, elixir-format
+msgid "Reinstate order %{number}?"
+msgstr "Reinstate order %{number}?"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:442
+#, elixir-autogen, elixir-format
+msgid "The order goes back to the status it had before it was cancelled. If one of its invoices was paid meanwhile, it is marked as paid."
+msgstr "The order goes back to the status it had before it was cancelled. If one of its invoices was paid meanwhile, it is marked as paid."
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:456
+#, elixir-autogen, elixir-format
+msgid "Why is this order being reinstated?"
+msgstr "Why is this order being reinstated?"
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:272
+#, elixir-autogen, elixir-format
+msgid "Order reinstated"
+msgstr "Order reinstated"
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:281
+#, elixir-autogen, elixir-format
+msgid "Failed to reinstate the order: %{reason}"
+msgstr "Failed to reinstate the order: %{reason}"
+
+#: lib/phoenix_kit_billing/errors.ex:212
+#, elixir-autogen, elixir-format
+msgid "Only a cancelled order can be reinstated."
+msgstr "Only a cancelled order can be reinstated."
