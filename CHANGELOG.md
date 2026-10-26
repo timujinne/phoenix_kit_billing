@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Added
+
+- **The module supplies the manifest of its 11 tables** (`expected_schema/0`, `PhoenixKitBilling.ExpectedSchema`), so `mix phoenix_kit.repair` and `mix phoenix_kit.doctor` check and repair them again, now from the module's own chain instead of core's manifest. Generated from `PhoenixKitBilling.Migrations` by core's `dev_docs/squash/generate_module_manifest.exs`, never edited by hand. Core uses it from the first release after 2.64.1; before that nothing reads it. Repair is additive (it creates what is missing and reports the rest) and checks the tables only while the database is at the chain's current version. No migration.
+
 ### Changed
 
 - The migration chain is now V6. V2 and V3 alter `phoenix_kit_currencies` and

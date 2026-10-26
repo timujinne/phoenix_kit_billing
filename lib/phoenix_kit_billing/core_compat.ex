@@ -37,6 +37,8 @@ defmodule PhoenixKitBilling.CoreCompat do
   # by hand below.
   @runtime_calls [
     {PhoenixKit.Activity, :log, 3},
+    # The generated `ExpectedSchema` validates the prefix it is handed.
+    {PhoenixKit.Migrations.Postgres.Helpers, :validate_prefix!, 1},
     # InvoiceEvents finds modules declaring billing_invoice_event_handlers/0.
     {PhoenixKit.ModuleRegistry, :all_modules, 0},
     {PhoenixKit.RepoHelper, :repo, 0},

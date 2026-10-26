@@ -232,6 +232,13 @@ defmodule PhoenixKitBilling do
   @impl PhoenixKit.Module
   def migration_module, do: PhoenixKitBilling.Migrations
 
+  @doc """
+  The manifest of this module's tables, for `mix phoenix_kit.repair` and
+  `mix phoenix_kit.doctor`; see `PhoenixKitBilling.ExpectedSchema`.
+  """
+  # No `@impl`, so this compiles against a core that lacks the callback.
+  def expected_schema, do: PhoenixKitBilling.ExpectedSchema
+
   # Without this the host's `:phoenix_kit_css_sources` compiler emits no
   # `@source` line for this package, so Tailwind never scans the billing
   # templates and purges every class they use out of the host's build.
