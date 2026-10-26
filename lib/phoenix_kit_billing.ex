@@ -2616,6 +2616,97 @@ defmodule PhoenixKitBilling do
     end
   end
 
+  @doc """
+  Reinstates a cancelled order: takes it back to the status it was cancelled
+  from (`metadata["cancelled_from"]`; `"pending"` for an order cancelled before
+  billing kept that trail - see `Order.reinstated_status/1`) and clears
+  `cancelled_at`. `refunded` is final and is not reinstated.
+
+  The trail goes into `metadata["reinstated"]` as `"status"`, `"reason"`
+  (trimmed and cut like the `cancel_order/3` reason, `nil` when blank),
+  `"by_uuid"` and `"at"`; the cancellation's own trail is kept. A reason is also
+  appended to `internal_notes` as a line `"Reinstated <YYYY-MM-DD HH:MM UTC>:
+  <reason>"`, after a blank line when there are notes already - what was there
+  is never replaced. The revision moves on, so an external system takes the
+  order again.
+
+  An invoice of the order may have been paid while the order was cancelled
+  (paying it does not move a cancelled order). Then the order does not stay at
+  the status it went back to: it is confirmed (when it went back to `"draft"` or
+  `"pending"`) and marked paid, in the same transaction, as a payment of the
+  invoice would have done.
+
+  ## Options
+
+  - `:actor_uuid` - the user who reinstates the order, kept in
+    `metadata["reinstated"]["by_uuid"]`. Leave it out when the system does it
+    (an integration that undoes a cancellation an external system refused).
+
+  Takes a row lock on the order for the duration of the call and decides on
+  the stored row, not the struct's, so of two concurrent calls one reinstates
+  and the other is refused. An order in the trash is refused: restore it with
+  `restore_order/2` first.
+
+  Returns `{:ok, order}` (the order as it ends up), `{:error,
+  :order_not_reinstatable}` when the stored status is not `"cancelled"`,
+  `{:error, :order_trashed}`, or `{:error, changeset}`. Refusals are returned,
+  not rolled back. On success an `:order_reinstated` event is broadcast, then
+  `:order_confirmed` and `:order_paid` when a paid invoice settled the order.
+  """
+  def reinstate_order(%Order{} = order, reason \\ nil, opts \\ []) do
+    reason = normalize_reason(reason)
+
+    result =
+      unwrap_transaction(fn ->
+        with {:ok, reinstated} <- reinstate_order_transition(order, reason, opts) do
+          {:ok, {reinstated, settle_reinstated_order(reinstated)}}
+        end
+      end)
+
+    case result do
+      {:ok, {reinstated, broadcasts}} ->
+        Events.broadcast_order_reinstated(reinstated)
+        Enum.each(broadcasts, fn {fun, arg} -> apply(Events, fun, [arg]) end)
+
+        {:ok,
+         case List.last(broadcasts) do
+           {_fun, settled} -> settled
+           nil -> reinstated
+         end}
+
+      error ->
+        error
+    end
+  end
+
+  defp reinstate_order_transition(order, reason, opts) do
+    transition_order(order, fn current ->
+      if current.status == "cancelled" do
+        current
+        |> Order.reinstate_changeset(opts[:actor_uuid], reason)
+        |> put_reason_note("Reinstated", current.internal_notes, reason)
+        |> repo().update()
+      else
+        {:error, :order_not_reinstatable}
+      end
+    end)
+  end
+
+  # Inside reinstate_order/3's transaction, with the order row locked: an
+  # invoice paid while the order was cancelled settles it now. Returns the
+  # broadcasts to send after the commit.
+  defp settle_reinstated_order(%Order{uuid: uuid}) do
+    paid_invoice =
+      from(i in Invoice,
+        where: i.order_uuid == ^uuid and i.status == "paid" and is_nil(i.trashed_at),
+        order_by: [asc: i.paid_at],
+        limit: 1
+      )
+      |> repo().one()
+
+    if paid_invoice, do: maybe_mark_linked_order_paid(paid_invoice), else: []
+  end
+
   defp put_reason_note(changeset, _label, _notes, nil), do: changeset
 
   defp put_reason_note(changeset, label, notes, reason) do
@@ -3611,8 +3702,8 @@ defmodule PhoenixKitBilling do
   Takes a row lock on the invoice, and then on its order, and decides on the
   stored rows. A restored invoice is open again, so its order is held to the rule
   for a new invoice: an order in the trash has no open invoice, and a cancelled
-  one takes none. A cancelled order stays cancelled, so an invoice trashed from it
-  stays in the trash (its number stays used).
+  one takes none, so an invoice trashed from a cancelled order stays in the trash
+  until the order is reinstated (`reinstate_order/3`; its number stays used).
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
   `{:error, :not_trashed}`, `{:error, :order_trashed}` when its order is in the

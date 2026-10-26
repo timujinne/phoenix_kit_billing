@@ -201,6 +201,13 @@ defmodule PhoenixKitBilling.ErrorsTest do
             "This order cannot be cancelled in its current state."
         )
 
+    test ":order_not_reinstatable",
+      do:
+        assert(
+          Errors.message(:order_not_reinstatable) ==
+            "Only a cancelled order can be reinstated."
+        )
+
     test ":order_not_editable",
       do: assert(Errors.message(:order_not_editable) == "This order can no longer be edited.")
 

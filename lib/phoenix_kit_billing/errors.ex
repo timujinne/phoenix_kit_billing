@@ -85,6 +85,7 @@ defmodule PhoenixKitBilling.Errors do
           | :order_not_cancellable
           | :order_not_editable
           | :order_not_payable
+          | :order_not_reinstatable
           | :order_not_refundable
           | :order_not_trashable
           | :order_trashed
@@ -206,6 +207,10 @@ defmodule PhoenixKitBilling.Errors do
 
   def message(:order_not_editable), do: gettext("This order can no longer be edited.")
   def message(:order_not_payable), do: gettext("This order cannot be paid in its current state.")
+
+  def message(:order_not_reinstatable),
+    do: gettext("Only a cancelled order can be reinstated.")
+
   def message(:order_not_refundable), do: gettext("This order cannot be refunded.")
 
   def message(:order_not_trashable),
