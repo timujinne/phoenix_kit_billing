@@ -76,7 +76,10 @@ defmodule PhoenixKitBilling.Schemas.TrashFieldsTest do
   describe "trash_changeset/2 and restore_changeset/1" do
     test "set and clear exactly the two fields" do
       for module <- [Order, Invoice] do
-        trashed = module.trash_changeset(struct(module), @actor)
+        # a stored row, as the trash only ever gets one
+        stored = fn fields -> module |> struct(fields) |> Ecto.put_meta(state: :loaded) end
+
+        trashed = module.trash_changeset(stored.([]), @actor)
         # updated_at is forced to what it is: trashing is not an edit.
         assert Map.keys(trashed.changes) |> Enum.sort() ==
                  [:trashed_at, :trashed_by_uuid, :updated_at]
@@ -84,10 +87,15 @@ defmodule PhoenixKitBilling.Schemas.TrashFieldsTest do
         assert trashed.changes.trashed_by_uuid == @actor
         assert %DateTime{} = trashed.changes.trashed_at
 
-        restored =
-          module.restore_changeset(struct(module, trashed_at: @now, trashed_by_uuid: @actor))
+        restored = module.restore_changeset(stored.(trashed_at: @now, trashed_by_uuid: @actor))
 
         assert restored.changes == %{trashed_at: nil, trashed_by_uuid: nil, updated_at: nil}
+
+        # an order's revision moves in the write (an external system acts on the trash);
+        # an invoice has none
+        expected_prepares = if module == Order, do: 1, else: 0
+        assert length(trashed.prepare) == expected_prepares
+        assert length(restored.prepare) == expected_prepares
       end
     end
 

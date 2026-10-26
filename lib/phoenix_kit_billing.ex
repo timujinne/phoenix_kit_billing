@@ -2967,7 +2967,8 @@ defmodule PhoenixKitBilling do
   Only a `draft` or `cancelled` order goes there, and only while none of its
   invoices is open - an invoice that is neither void nor in the trash. The status
   does not change, nothing is emailed, and nothing is deleted: `restore_order/2`
-  brings it back.
+  brings it back. `updated_at` is not touched, but the revision moves (see
+  `Order`'s moduledoc), and so it does on `restore_order/2`.
 
   ## Options
 
