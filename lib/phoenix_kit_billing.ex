@@ -2634,9 +2634,9 @@ defmodule PhoenixKitBilling do
   (paying it does not move a cancelled order). Then the order does not stay at
   the status it went back to: it is confirmed (when it went back to `"draft"` or
   `"pending"`) and marked paid, in the same transaction, as a payment of the
-  invoice would have done. A payment or a refund of the invoice that runs at the same time waits for the order row and then sees the
-  reinstated order, so the order ends up paid (or refunded) whichever commits
-  first.
+  invoice would have done. A payment or a refund of the invoice that runs at
+  the same time waits for the order row and then sees the reinstated order, so
+  the order ends up paid (or refunded) whichever commits first.
 
   ## Options
 
