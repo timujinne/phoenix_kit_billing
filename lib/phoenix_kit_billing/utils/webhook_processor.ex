@@ -264,6 +264,12 @@ defmodule PhoenixKitBilling.WebhookProcessor do
     )
 
     case Billing.record_payment_after_void(invoice, charge) do
+      # The notification is at-most-once: it goes out after the trail commit and
+      # is not queued with it (`InvoiceEvents` only carries paid/refunded/voided
+      # to other modules' handlers, and `Notifications` has no durable queue). If
+      # the process dies between the two, the retry finds the charge on the trail
+      # (`:duplicate`) and does not notify. The charge is not lost: it is on the
+      # trail, in the error log above and in the warning on the invoice page.
       {:ok, _invoice, :added} ->
         _ = Notifications.payment_failed(invoice, :invoice_void)
         {:ok, :invoice_void}

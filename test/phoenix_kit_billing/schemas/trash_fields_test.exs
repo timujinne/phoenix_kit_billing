@@ -146,5 +146,22 @@ defmodule PhoenixKitBilling.Schemas.TrashFieldsTest do
       assert Invoice.sendable?(%Invoice{status: "draft"})
       assert Invoice.voidable?(%Invoice{status: "draft"})
     end
+
+    test "void_offered? is voidable? without payments on the invoice" do
+      paid_some = Decimal.new("40.00")
+
+      assert Invoice.void_offered?(%Invoice{status: "sent", paid_amount: Decimal.new(0)})
+      refute Invoice.void_offered?(%Invoice{status: "sent", paid_amount: paid_some})
+      refute Invoice.void_offered?(%Invoice{status: "paid", paid_amount: Decimal.new(0)})
+
+      refute Invoice.void_offered?(%Invoice{
+               status: "draft",
+               paid_amount: Decimal.new(0),
+               trashed_at: @now
+             })
+
+      # voidable? looks at the status alone.
+      assert Invoice.voidable?(%Invoice{status: "sent", paid_amount: paid_some})
+    end
   end
 end

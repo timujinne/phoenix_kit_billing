@@ -449,11 +449,22 @@ defmodule PhoenixKitBilling.Invoice do
   def payable?(_), do: false
 
   @doc """
-  Checks if invoice can be voided.
+  Checks if the invoice's status allows voiding it: `draft`, `sent` or `overdue`,
+  and not in the trash. It looks at nothing else - `PhoenixKitBilling.void_invoice/3`
+  also refuses an invoice with payments (`{:error, :invoice_has_payments}`; a
+  partial payment leaves the status at `sent`). See `void_offered?/1`.
   """
   def voidable?(%__MODULE__{trashed_at: %DateTime{}}), do: false
   def voidable?(%__MODULE__{status: status}) when status in ~w(draft sent overdue), do: true
   def voidable?(_), do: false
+
+  @doc """
+  Checks if voiding the invoice can succeed as far as the struct shows:
+  `voidable?/1` and no payments on it. What the admin page offers a *Void*
+  button for; `PhoenixKitBilling.void_invoice/3` decides again on the locked row.
+  """
+  def void_offered?(%__MODULE__{} = invoice),
+    do: voidable?(invoice) and not has_payments?(invoice)
 
   @doc """
   Checks if an invoice still counts against its order: it has not been voided

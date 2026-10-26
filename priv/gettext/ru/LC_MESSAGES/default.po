@@ -4989,7 +4989,7 @@ msgstr "Заказ отменён, этот счёт к нему не верну
 msgid "This invoice has payments and cannot be voided. Issue a refund instead."
 msgstr "По счёту есть оплата — аннулировать нельзя, только возврат."
 
-#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:108
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:116
 #, elixir-autogen, elixir-format
 msgid "Cannot be voided: it has payments. Refund them instead."
 msgstr "Аннулировать нельзя: есть оплата. Сделайте возврат."

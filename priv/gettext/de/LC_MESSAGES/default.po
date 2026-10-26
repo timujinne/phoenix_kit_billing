@@ -4833,7 +4833,7 @@ msgstr ""
 msgid "This invoice has payments and cannot be voided. Issue a refund instead."
 msgstr ""
 
-#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:108
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:116
 #, elixir-autogen, elixir-format
 msgid "Cannot be voided: it has payments. Refund them instead."
 msgstr ""
