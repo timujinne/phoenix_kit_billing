@@ -252,8 +252,12 @@ defmodule PhoenixKitBilling.Migrations do
   number the counter issued, and its create then fails on the unique index.
 
   Unlike every table above, this one is created by this chain, not by core, so
-  `down/1` below V7 drops it. A later `up/1` then reseeds from the rows that
-  survive, so the numbers of deleted top rows can come back.
+  `down/1` below V7 drops it, counters and all. A later `up/1` then reseeds each
+  scope from the rows that survive, so the number of a row deleted since can be
+  issued again when it was the highest of its year and prefix: while the
+  counters live a deleted row's number is never given out twice, but
+  `delete_order/1` still deletes a draft order that has no invoices, and a
+  rollback forgets what the counter had issued.
 
   ## V8 - a trash for orders and invoices
 
@@ -276,7 +280,9 @@ defmodule PhoenixKitBilling.Migrations do
 
   `down/1` below V8 drops the four indexes and the four columns - never either
   table. Rows that were in the trash are not deleted; they simply read as not
-  trashed again, so they reappear in the lists.
+  trashed again, so they reappear in the lists, and when they were trashed and by
+  whom is lost with the columns. A reason given to `trash_order/2` stays: it is
+  a line in the order's `internal_notes`, not in these columns.
 
   ## Lock order - read before wrapping creates in your own transaction
 
