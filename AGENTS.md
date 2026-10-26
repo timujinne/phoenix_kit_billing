@@ -241,10 +241,10 @@ The trail is `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`),
 billing's own like `cancelled_from`; a reason is also appended to the stored
 `internal_notes` as `Reinstated <date>: <reason>`. An invoice paid while the order
 was cancelled settles it in the same transaction (confirmed, then paid, with
-`:order_confirmed` / `:order_paid`); one partly refunded since (`paid` with less
-than its total) does not, and a settlement that fails rolls the reinstate back.
-Paying and refunding read the linked order's status under its row lock (step 7),
-so they wait for a reinstate in flight instead of reading the order as cancelled. It decides on the locked row: anything but
+`:order_confirmed` / `:order_paid`). Paying and refunding read the linked order's
+status under its row lock (step 7), so they wait for a reinstate in flight
+instead of reading the order as cancelled. The reinstate decides on the locked row:
+anything but
 `cancelled` is `:order_not_reinstatable` (`refunded` is final), an order in the
 trash is `:order_trashed` - restore it first. The admin order page offers
 *Reinstate order* under `manage_orders`.
