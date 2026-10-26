@@ -4838,3 +4838,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Cannot be voided: it has payments. Refund them instead."
 msgstr ""
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:447
+#, elixir-autogen, elixir-format
+msgid "Why is this order being moved to the trash?"
+msgstr ""

@@ -4978,3 +4978,8 @@ msgstr "This invoice has payments and cannot be voided. Issue a refund instead."
 #, elixir-autogen, elixir-format
 msgid "Cannot be voided: it has payments. Refund them instead."
 msgstr "Cannot be voided: it has payments. Refund them instead."
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:447
+#, elixir-autogen, elixir-format
+msgid "Why is this order being moved to the trash?"
+msgstr "Why is this order being moved to the trash?"

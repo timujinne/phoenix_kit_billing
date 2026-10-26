@@ -190,7 +190,7 @@ Orders and draft invoices are not deleted from the admin: they go to a trash
 Nothing empties it.
 
 ```elixir
-{:ok, order} = PhoenixKitBilling.trash_order(order, actor_uuid: admin.uuid)
+{:ok, order} = PhoenixKitBilling.trash_order(order, actor_uuid: admin.uuid, reason: "Created by mistake")
 {:ok, order} = PhoenixKitBilling.restore_order(order)
 
 {:ok, invoice} = PhoenixKitBilling.trash_invoice(invoice, actor_uuid: admin.uuid)

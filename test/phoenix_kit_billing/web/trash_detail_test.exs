@@ -88,6 +88,47 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
       )
     end
 
+    test "the confirmation takes an optional reason, kept in the notes and the activity entry",
+         %{conn: conn, user: user} do
+      order = order(user, %{"internal_notes" => "Called the customer"})
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")
+
+      view |> element("#trash-order-button") |> render_click()
+      assert has_element?(view, "#trash-order-form textarea[name=reason][maxlength='500']")
+
+      view |> form("#trash-order-form", %{"reason" => "Created by mistake"}) |> render_submit()
+
+      refute has_element?(view, "#trash-order-modal")
+
+      stored = Billing.get_order!(order.uuid)
+      assert Order.trashed?(stored)
+      assert stored.internal_notes =~ "Called the customer\n\nTrashed "
+      assert stored.internal_notes =~ ": Created by mistake"
+
+      assert_activity_logged("billing.order_trashed",
+        resource_uuid: order.uuid,
+        metadata_has: %{"reason" => "Created by mistake"}
+      )
+    end
+
+    test "without a reason the notes and the activity entry carry none", %{
+      conn: conn,
+      user: user
+    } do
+      order = order(user, %{"internal_notes" => "Called the customer"})
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")
+
+      view |> element("#trash-order-button") |> render_click()
+      view |> form("#trash-order-form", %{"reason" => "  "}) |> render_submit()
+
+      stored = Billing.get_order!(order.uuid)
+      assert Order.trashed?(stored)
+      assert stored.internal_notes == "Called the customer"
+
+      row = assert_activity_logged("billing.order_trashed", resource_uuid: order.uuid)
+      refute Map.has_key?(row.metadata, "reason")
+    end
+
     test "closing the confirmation trashes nothing", %{conn: conn, user: user} do
       order = order(user)
       {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")

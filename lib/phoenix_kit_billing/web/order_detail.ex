@@ -246,18 +246,24 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
   end
 
   @impl true
-  def handle_event("trash_order", _params, socket) do
+  def handle_event("trash_order", params, socket) do
     Authz.authorize(socket, :manage_orders, fn ->
       actor_uuid = Activity.actor_uuid(socket)
 
-      case Billing.trash_order(socket.assigns.order, actor_uuid: actor_uuid) do
+      case Billing.trash_order(socket.assigns.order,
+             actor_uuid: actor_uuid,
+             reason: params["reason"]
+           ) do
         {:ok, order} ->
           Activity.log("billing.order_trashed",
             actor_uuid: actor_uuid,
             actor_role: Activity.actor_role(socket),
             resource_type: "order",
             resource_uuid: order.uuid,
-            metadata: %{"order_number" => order.order_number, "status" => order.status}
+            # The operator's own reason, typed for the audit trail (not customer data).
+            metadata:
+              %{"order_number" => order.order_number, "status" => order.status}
+              |> put_reason(params["reason"])
           )
 
           {:noreply,

@@ -4993,3 +4993,8 @@ msgstr "По счёту есть оплата — аннулировать не�
 #, elixir-autogen, elixir-format
 msgid "Cannot be voided: it has payments. Refund them instead."
 msgstr "Аннулировать нельзя: есть оплата. Сделайте возврат."
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:447
+#, elixir-autogen, elixir-format
+msgid "Why is this order being moved to the trash?"
+msgstr "Почему заказ перемещается в корзину?"

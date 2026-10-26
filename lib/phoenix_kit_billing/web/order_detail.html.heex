@@ -435,6 +435,19 @@
         </p>
 
         <form id="trash-order-form" phx-submit="trash_order">
+          <div class="fieldset mt-4">
+            <label class="label">
+              <span class="fieldset-legend">{gettext("Reason (optional)")}</span>
+            </label>
+            <textarea
+              name="reason"
+              rows="3"
+              maxlength={PhoenixKitBilling.reason_max_length()}
+              class="textarea w-full"
+              placeholder={gettext("Why is this order being moved to the trash?")}
+            ></textarea>
+          </div>
+
           <div class="modal-action">
             <button type="button" phx-click="close_trash_modal" class="btn">
               {gettext("Back")}
