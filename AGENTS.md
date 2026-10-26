@@ -245,7 +245,8 @@ the dashboard leave the trash out by default (`trashed: :only | :include`
 brings it back), and so do a customer's orders, the invoices preloaded on them
 and `get_order_by_uuid/2`. An invoice cannot be created for, moved onto or
 restored onto an order in the trash or a cancelled one (`:order_trashed`,
-`:order_cancelled`). The checks lock the order row against
+`:order_cancelled`); a cancelled order stays cancelled, so an invoice trashed from
+it stays in the trash (its number stays used). The checks lock the order row against
 `trash_order/2`. A stored order is edited only while its stored status is `draft`
 or `pending`: `update_order/2` re-checks that, and any status change, on the
 locked row, so a stale struct cannot undo a cancellation. Trashing and restoring do not

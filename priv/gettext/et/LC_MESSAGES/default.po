@@ -4967,5 +4967,5 @@ msgstr "Trashed by"
 
 #: lib/phoenix_kit_billing/errors.ex:194
 #, elixir-autogen, elixir-format
-msgid "This order is cancelled and cannot take a new invoice."
-msgstr "This order is cancelled and cannot take a new invoice."
+msgid "This order is cancelled and cannot take this invoice."
+msgstr "This order is cancelled and cannot take this invoice."

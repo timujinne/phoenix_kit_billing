@@ -321,11 +321,12 @@ defmodule PhoenixKitBilling.Integration.TrashGuardsTest do
       assert Invoice.trashed?(Billing.get_invoice!(trashed.uuid))
     end
 
-    test "that is a draft or pending is allowed", %{user: user} do
+    test "that is a draft, pending or confirmed is allowed", %{user: user} do
       draft = order(user)
       pending = order(user, %{"status" => "pending"})
+      {:ok, confirmed} = Billing.confirm_order(order(user))
 
-      for order <- [draft, pending] do
+      for order <- [draft, pending, confirmed] do
         trashed = trashed_invoice_of(order)
         assert {:ok, restored} = Billing.restore_invoice(trashed)
         refute Invoice.trashed?(restored)

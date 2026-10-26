@@ -299,7 +299,7 @@ defmodule PhoenixKitBilling.ErrorsTest do
       do:
         assert(
           Errors.message(:order_cancelled) ==
-            "This order is cancelled and cannot take a new invoice."
+            "This order is cancelled and cannot take this invoice."
         )
 
     test ":order_not_trashable",

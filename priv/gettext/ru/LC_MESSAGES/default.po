@@ -4981,5 +4981,5 @@ msgstr "Кто переместил"
 
 #: lib/phoenix_kit_billing/errors.ex:194
 #, elixir-autogen, elixir-format
-msgid "This order is cancelled and cannot take a new invoice."
-msgstr "Этот заказ отменён, на него нельзя выставить новый счёт."
+msgid "This order is cancelled and cannot take this invoice."
+msgstr "Заказ отменён, этот счёт к нему не вернуть."

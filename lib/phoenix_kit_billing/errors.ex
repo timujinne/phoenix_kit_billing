@@ -191,7 +191,7 @@ defmodule PhoenixKitBilling.Errors do
     do: gettext("This order has invoices and cannot be deleted.")
 
   def message(:order_cancelled),
-    do: gettext("This order is cancelled and cannot take a new invoice.")
+    do: gettext("This order is cancelled and cannot take this invoice.")
 
   def message(:order_has_open_invoices),
     do: gettext("This order has an invoice that is neither void nor in the trash.")

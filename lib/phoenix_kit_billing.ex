@@ -3440,7 +3440,8 @@ defmodule PhoenixKitBilling do
     insert_invoice(build, config, source, order_uuid)
   end
 
-  # The order an invoice is created for, or moved onto, must be able to take it:
+  # The order an invoice is created for, moved onto or restored onto must be able
+  # to take it:
   # not in the trash, not cancelled. Checked in the transaction that writes the
   # invoice, with the order row locked `FOR KEY SHARE` - what the invoice's
   # foreign key takes on the order anyway. That conflicts with the `FOR UPDATE`
@@ -3585,7 +3586,8 @@ defmodule PhoenixKitBilling do
   Takes a row lock on the invoice, and then on its order, and decides on the
   stored rows. A restored invoice is open again, so its order is held to the rule
   for a new invoice: an order in the trash has no open invoice, and a cancelled
-  one takes none - restore the order first (a cancelled order cannot be).
+  one takes none. A cancelled order stays cancelled, so an invoice trashed from it
+  stays in the trash (its number stays used).
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
   `{:error, :not_trashed}`, `{:error, :order_trashed}` when its order is in the

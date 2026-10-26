@@ -565,6 +565,7 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
       view |> form("#restore-invoice-form") |> render_submit()
 
       assert has_element?(view, "#flash-error", "cancelled")
+      assert has_element?(view, "#restore-invoice-button")
       assert Invoice.trashed?(Billing.get_invoice!(invoice.uuid))
     end
 

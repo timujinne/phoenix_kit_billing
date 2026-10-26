@@ -206,7 +206,10 @@ PhoenixKitBilling.list_orders(%{trashed: :only})    # :include for both
 - A document in the trash refuses every change with `{:error, :order_trashed}` /
   `{:error, :invoice_trashed}` until it is restored, and no email goes out.
 - An invoice cannot be created for, moved onto or restored onto an order in the
-  trash or a cancelled one (`:order_trashed`, `:order_cancelled`). Trashing and restoring leave `updated_at` as it was.
+  trash or a cancelled one (`:order_trashed`, `:order_cancelled`). A cancelled
+  order stays cancelled, so an invoice trashed from it stays in the trash (its
+  number stays used).
+- Trashing and restoring leave `updated_at` as it was.
 - Restoring a trashed draft invoice puts back its old figures. If the order's
   lines changed meanwhile, the invoice no longer matches them: check it before
   sending.
