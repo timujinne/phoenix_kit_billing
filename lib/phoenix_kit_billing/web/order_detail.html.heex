@@ -22,55 +22,55 @@
             <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
           </button>
         <% else %>
-        <%= case @order.status do %>
-          <% "draft" -> %>
-            <button phx-click="confirm_order" class="btn btn-info btn-sm">
-              <.icon name="hero-check" class="w-4 h-4" /> {gettext("Confirm Order")}
+          <%= case @order.status do %>
+            <% "draft" -> %>
+              <button phx-click="confirm_order" class="btn btn-info btn-sm">
+                <.icon name="hero-check" class="w-4 h-4" /> {gettext("Confirm Order")}
+              </button>
+              <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
+                <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
+              </button>
+              <.link
+                navigate={PhoenixKit.Utils.Routes.path("/admin/billing/orders/#{@order.uuid}/edit")}
+                class="btn btn-outline btn-sm"
+              >
+                <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Edit")}
+              </.link>
+            <% "pending" -> %>
+              <button phx-click="confirm_order" class="btn btn-info btn-sm">
+                <.icon name="hero-check" class="w-4 h-4" /> {gettext("Confirm Order")}
+              </button>
+              <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
+                <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
+              </button>
+            <% "confirmed" -> %>
+              <button phx-click="mark_paid" class="btn btn-success btn-sm">
+                <.icon name="hero-banknotes" class="w-4 h-4" /> {gettext("Mark as Paid")}
+              </button>
+              <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
+                <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
+              </button>
+            <% _ -> %>
+          <% end %>
+          <%= if @order.status in ["draft", "pending", "confirmed"] do %>
+            <button
+              id="cancel-order-button"
+              phx-click="open_cancel_modal"
+              class="btn btn-error btn-outline btn-sm"
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Cancel")}
             </button>
-            <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
-              <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
-            </button>
-            <.link
-              navigate={PhoenixKit.Utils.Routes.path("/admin/billing/orders/#{@order.uuid}/edit")}
+          <% end %>
+          <%= if @can_manage_orders and Order.trashable?(@order) and
+                   not Enum.any?(@invoices, &PhoenixKitBilling.Invoice.open?/1) do %>
+            <button
+              id="trash-order-button"
+              phx-click="open_trash_modal"
               class="btn btn-outline btn-sm"
             >
-              <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Edit")}
-            </.link>
-          <% "pending" -> %>
-            <button phx-click="confirm_order" class="btn btn-info btn-sm">
-              <.icon name="hero-check" class="w-4 h-4" /> {gettext("Confirm Order")}
+              <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
             </button>
-            <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
-              <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
-            </button>
-          <% "confirmed" -> %>
-            <button phx-click="mark_paid" class="btn btn-success btn-sm">
-              <.icon name="hero-banknotes" class="w-4 h-4" /> {gettext("Mark as Paid")}
-            </button>
-            <button phx-click="generate_invoice" class="btn btn-outline btn-sm">
-              <.icon name="hero-document-text" class="w-4 h-4" /> {gettext("Generate Invoice")}
-            </button>
-          <% _ -> %>
-        <% end %>
-        <%= if @order.status in ["draft", "pending", "confirmed"] do %>
-          <button
-            id="cancel-order-button"
-            phx-click="open_cancel_modal"
-            class="btn btn-error btn-outline btn-sm"
-          >
-            <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Cancel")}
-          </button>
-        <% end %>
-        <%= if @can_manage_orders and Order.trashable?(@order) and
-                 not Enum.any?(@invoices, &PhoenixKitBilling.Invoice.open?/1) do %>
-          <button
-            id="trash-order-button"
-            phx-click="open_trash_modal"
-            class="btn btn-outline btn-sm"
-          >
-            <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Move to trash")}
-          </button>
-        <% end %>
+          <% end %>
         <% end %>
       </:actions>
     </.admin_page_header>

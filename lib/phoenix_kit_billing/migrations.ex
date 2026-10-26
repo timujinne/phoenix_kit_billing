@@ -278,17 +278,50 @@ defmodule PhoenixKitBilling.Migrations do
   table. Rows that were in the trash are not deleted; they simply read as not
   trashed again, so they reappear in the lists.
 
-  Locks. A create holds its counter row until its transaction ends. Take them
-  in this order, everywhere: order counter, invoice counter, invoice row,
-  transaction counter, receipt counter, order row (`FOR NO KEY UPDATE`). (An
-  `update_invoice` that changes a number locks the invoice row first, then
-  lifts the counters - no other path waits on that row while holding a counter
-  it needs.) A host
-  that wraps several creates in one transaction must keep that order, or two of
-  them can deadlock (Postgres aborts one). The subscription renewal worker
-  creates its invoice inside the transaction that also charges the payment
-  method, so it holds the invoice counter across the provider call: other
-  invoice creates wait for the charge to finish.
+  ## Lock order - read before wrapping creates in your own transaction
+
+  A create holds its counter row until its transaction ends, and the trash and
+  the invoice guards lock order rows, so the order in which a transaction takes
+  locks matters as soon as it does more than one thing. Postgres aborts one of
+  two transactions that wait on each other; these rules keep the library's own
+  paths from doing it, and a host that wraps several calls in one transaction
+  must keep them too.
+
+  Taking locks in this order, everywhere:
+
+    1. An order row taken `FOR UPDATE`: `trash_order/2`, `restore_order/2`,
+       `delete_order/1`, and an `update_order/2` that changes the number (the
+       unique index makes that write a `FOR UPDATE` anyway, so it is taken up
+       front). **Never take an order `FOR UPDATE` while holding a counter** -
+       the invoice counter or any other - **or another document's lock.** These
+       paths take their row first and then, if at all, a counter.
+    2. The order counter (`create_order/2`, and `update_order/2` after its row).
+    3. For an invoice created for an order, or moved onto one (`update_invoice/2`
+       with a new `order_uuid`): the order row `FOR KEY SHARE`, before the invoice
+       counter. This is the guard that refuses an order in the trash or
+       cancelled. `restore_invoice/2` takes the invoice row first, then the order
+       row `FOR KEY SHARE`.
+    4. The invoice counter.
+    5. The invoice row. (An `update_invoice` that changes a number locks the
+       invoice row first, then lifts the counters - no other path waits on that
+       row while holding a counter it needs.)
+    6. The transaction counter, then the receipt counter.
+    7. The order row `FOR NO KEY UPDATE` (status transitions, `put_order_sync/2`).
+
+  Because the invoice insert takes the order row before the invoice counter, an
+  invoice create and a `trash_order/2` or `delete_order/1` of the same order meet
+  on the row alone, with no counter held on either side, and cannot deadlock.
+
+  What a host must still avoid: creating an invoice for order A and then
+  trashing, restoring or deleting order B in the same transaction. The second step
+  waits for B's `FOR UPDATE` while the transaction holds the invoice counter; if
+  another session is creating an invoice for B (holding B's `FOR KEY SHARE` and
+  waiting for the invoice counter) the two wait on each other. Do the trash or
+  delete first, or in its own transaction.
+
+  The subscription renewal worker creates its invoice inside the transaction that
+  also charges the payment method, so it holds the invoice counter across the
+  provider call: other invoice creates wait for the charge to finish.
   """
 
   use Ecto.Migration

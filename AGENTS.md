@@ -244,7 +244,11 @@ invoice refuses every change with `:order_trashed` / `:invoice_trashed`
 the dashboard leave the trash out by default (`trashed: :only | :include`
 brings it back), and so do a customer's orders, the invoices preloaded on them
 and `get_order_by_uuid/2`. An invoice cannot be created for, or restored onto,
-an order in the trash: both lock the order row against `trash_order/2`.
+an order in the trash or cancelled (`:order_trashed`, `:order_cancelled`): the
+checks lock the order row against `trash_order/2`, and `update_invoice/2` applies
+them when it moves an invoice onto another order. Trashing and restoring do not
+touch `updated_at`. A void invoice of an order in the trash stays in the invoice
+lists: it is an issued document, and only a draft can be trashed.
 
 ### Contexts and services
 
@@ -438,8 +442,9 @@ in hosts; the test suite applies it by executing
   `count(rows of the year) + 1` handed out a taken number once a row was
   deleted. A generated number that a row already has is skipped (a savepoint,
   after lifting the counter to the highest number there; up to 20 tries). `down/1` below V7 drops the table. A create holds its counter row
-  until its transaction ends; the lock order and the rules for calling a create
-  inside your own transaction are in the V7 section of the `Migrations`
+  until its transaction ends; the lock order (counters, invoice rows and the order
+  rows the trash and the invoice guards take) and the rules for calling a create
+  inside your own transaction are in the "Lock order" section of the `Migrations`
   moduledoc and the `@doc`s.
 - **V8 adds the trash**: `trashed_at` and `trashed_by_uuid` (no foreign key) on
   `phoenix_kit_orders` and `phoenix_kit_invoices`, plus a partial index per table
