@@ -306,8 +306,8 @@ defmodule PhoenixKitBilling.Migrations do
     3. For an invoice created for an order, or moved onto one (`update_invoice/2`
        with a new `order_uuid`): the order row `FOR KEY SHARE`, before the invoice
        counter. This is the guard that refuses an order in the trash or
-       cancelled. `restore_invoice/2` takes the invoice row first, then the order
-       row `FOR KEY SHARE`.
+       cancelled. `restore_invoice/2` applies the same guard, but takes the
+       invoice row first, then the order row `FOR KEY SHARE`.
     4. The invoice counter.
     5. The invoice row. (An `update_invoice` that changes a number locks the
        invoice row first, then lifts the counters - no other path waits on that

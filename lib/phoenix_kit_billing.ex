@@ -3456,15 +3456,6 @@ defmodule PhoenixKitBilling do
     end
   end
 
-  # Restoring an invoice puts back one that was already on its order, so a
-  # cancelled order does not stop it; one in the trash does.
-  defp ensure_order_not_trashed_for_restore(order_uuid) do
-    case lock_order_state(order_uuid) do
-      %{trashed_at: %DateTime{}} -> {:error, :order_trashed}
-      _ -> :ok
-    end
-  end
-
   # `nil` for no order, an invalid uuid or an order that is gone (the invoice's
   # foreign key then says what is wrong).
   defp lock_order_state(order_uuid) do
@@ -3592,12 +3583,14 @@ defmodule PhoenixKitBilling do
   Takes an invoice out of the trash. Nothing else about it changes.
 
   Takes a row lock on the invoice, and then on its order, and decides on the
-  stored rows. An order in the trash has no open invoice, so an invoice cannot
-  come back to it: restore the order first.
+  stored rows. A restored invoice is open again, so its order is held to the rule
+  for a new invoice: an order in the trash has no open invoice, and a cancelled
+  one takes none - restore the order first (a cancelled order cannot be).
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
   `{:error, :not_trashed}`, `{:error, :order_trashed}` when its order is in the
-  trash or `{:error, :invoice_not_found}`. Refusals are returned, not rolled
+  trash, `{:error, :order_cancelled}` when it is cancelled or
+  `{:error, :invoice_not_found}`. Refusals are returned, not rolled
   back. On success an `:invoice_restored` event is broadcast. The options are
   accepted for symmetry with `trash_invoice/2` and not used.
   """
@@ -3610,7 +3603,7 @@ defmodule PhoenixKitBilling do
 
           locked ->
             with true <- Invoice.trashed?(locked) || {:error, :not_trashed},
-                 :ok <- ensure_order_not_trashed_for_restore(locked.order_uuid) do
+                 :ok <- ensure_order_takes_invoice(locked.order_uuid) do
               locked |> Invoice.restore_changeset() |> repo().update()
             end
         end

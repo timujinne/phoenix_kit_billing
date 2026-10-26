@@ -304,4 +304,56 @@ defmodule PhoenixKitBilling.Integration.TrashGuardsTest do
       assert counter("order").last_value == before + 1
     end
   end
+
+  describe "restore_invoice/2 onto an order" do
+    defp trashed_invoice_of(order) do
+      {:ok, invoice} = Billing.create_invoice_from_order(order)
+      {:ok, trashed} = Billing.trash_invoice(invoice)
+      trashed
+    end
+
+    test "that is cancelled is refused, and the invoice stays in the trash", %{user: user} do
+      order = order(user)
+      trashed = trashed_invoice_of(order)
+      {:ok, _} = Billing.cancel_order(order)
+
+      assert {:error, :order_cancelled} = Billing.restore_invoice(trashed)
+      assert Invoice.trashed?(Billing.get_invoice!(trashed.uuid))
+    end
+
+    test "that is a draft or pending is allowed", %{user: user} do
+      draft = order(user)
+      pending = order(user, %{"status" => "pending"})
+
+      for order <- [draft, pending] do
+        trashed = trashed_invoice_of(order)
+        assert {:ok, restored} = Billing.restore_invoice(trashed)
+        refute Invoice.trashed?(restored)
+      end
+    end
+
+    test "a refusal leaves a caller's transaction usable", %{user: user} do
+      order = order(user)
+      trashed = trashed_invoice_of(order)
+      {:ok, _} = Billing.cancel_order(order)
+
+      assert {:ok, {:error, :order_cancelled}} =
+               Repo.transaction(fn ->
+                 refusal = Billing.restore_invoice(trashed)
+
+                 {:ok, _} =
+                   Billing.create_invoice(user.uuid, %{
+                     total: Decimal.new("1.00"),
+                     currency: "EUR"
+                   })
+
+                 refusal
+               end)
+    end
+
+    test "an invoice without an order is restored as before", %{user: user} do
+      {:ok, trashed} = Billing.trash_invoice(standalone(user))
+      assert {:ok, _} = Billing.restore_invoice(trashed)
+    end
+  end
 end

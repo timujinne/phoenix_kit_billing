@@ -551,6 +551,23 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
       assert Invoice.trashed?(Billing.get_invoice!(invoice.uuid))
     end
 
+    test "restoring it onto a cancelled order is refused with a message", %{
+      conn: conn,
+      user: user
+    } do
+      order = order(user)
+      {:ok, invoice} = Billing.create_invoice_from_order(order)
+      {:ok, _} = Billing.trash_invoice(invoice)
+      {:ok, _} = Billing.cancel_order(order)
+
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
+      view |> element("#restore-invoice-button") |> render_click()
+      view |> form("#restore-invoice-form") |> render_submit()
+
+      assert has_element?(view, "#flash-error", "cancelled")
+      assert Invoice.trashed?(Billing.get_invoice!(invoice.uuid))
+    end
+
     test "restoring it onto an order in the trash is refused with a message", %{
       conn: conn,
       user: user
