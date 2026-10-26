@@ -50,6 +50,7 @@ defmodule PhoenixKitBilling.Errors do
           | :invalid_response
           | :invalid_signature
           | :invalid_timestamp
+          | :invoice_has_payments
           | :invoice_not_editable
           | :invoice_not_found
           | :invoice_not_paid
@@ -140,6 +141,10 @@ defmodule PhoenixKitBilling.Errors do
 
   def message(:invalid_signature), do: gettext("The webhook signature is invalid.")
   def message(:invalid_timestamp), do: gettext("The webhook timestamp is invalid.")
+
+  def message(:invoice_has_payments),
+    do: gettext("This invoice has payments and cannot be voided. Issue a refund instead.")
+
   def message(:invoice_not_editable), do: gettext("This invoice can no longer be edited.")
   def message(:invoice_not_found), do: gettext("Invoice not found.")
   def message(:invoice_not_paid), do: gettext("This invoice has not been paid.")

@@ -98,15 +98,24 @@
             </button>
           <% end %>
 
-          <%!-- Void - available for draft/sent/overdue --%>
+          <%!-- Void - available for draft/sent/overdue while no money is on the invoice --%>
           <%= if @invoice.status in ["draft", "sent", "overdue"] do %>
-            <button
-              id="void-invoice-button"
-              phx-click="open_void_modal"
-              class="btn btn-error btn-outline btn-sm"
-            >
-              <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Void")}
-            </button>
+            <%= if PhoenixKitBilling.Invoice.has_payments?(@invoice) do %>
+              <span
+                id="void-invoice-unavailable"
+                class="text-xs text-base-content/60 self-center"
+              >
+                {gettext("Cannot be voided: it has payments. Refund them instead.")}
+              </span>
+            <% else %>
+              <button
+                id="void-invoice-button"
+                phx-click="open_void_modal"
+                class="btn btn-error btn-outline btn-sm"
+              >
+                <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Void")}
+              </button>
+            <% end %>
           <% end %>
 
           <.link

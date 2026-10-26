@@ -4546,13 +4546,16 @@ defmodule PhoenixKitBilling do
   - `:actor_uuid` - the user who voids the invoice
 
   Takes a row lock on the invoice for the duration of the call and checks
-  `Invoice.voidable?/1` against the stored row, not the struct's, so a payment
-  committed since the struct was read is not overwritten. Call it inside your
-  own transaction only if holding that lock until commit is fine.
+  `Invoice.voidable?/1` and `Invoice.has_payments?/1` against the stored row,
+  not the struct's, so a payment committed since the struct was read is not
+  overwritten. An invoice with money on it (a partial payment leaves the status
+  at `"sent"`) is not voided: refund the payments first. Call it inside your own
+  transaction only if holding that lock until commit is fine.
 
   Returns `{:ok, invoice}` (without the preloads of the struct passed in),
-  `{:error, :invoice_not_voidable}`, `{:error, :invoice_trashed}` for an invoice
-  in the trash, `{:error, :invoice_not_found}` when the invoice is gone, or
+  `{:error, :invoice_not_voidable}`, `{:error, :invoice_has_payments}`,
+  `{:error, :invoice_trashed}` for an invoice in the trash,
+  `{:error, :invoice_not_found}` when the invoice is gone, or
   `{:error, changeset}`. Refusals are returned, not rolled
   back, so a transaction of the caller's stays usable.
   """
@@ -4582,28 +4585,32 @@ defmodule PhoenixKitBilling do
         {:error, :invoice_trashed}
 
       locked ->
-        if Invoice.voidable?(locked) do
-          trail = %{
-            "reason" => normalize_reason(reason),
-            "by_uuid" => opts[:actor_uuid],
-            "at" => now_iso()
-          }
-
-          locked
-          |> Invoice.status_changeset("void")
-          |> Ecto.Changeset.put_change(:metadata, Map.put(locked.metadata || %{}, "void", trail))
-          |> repo().update()
-          |> case do
-            {:ok, voided} ->
-              InvoiceEvents.enqueue(:voided, voided)
-              {:ok, voided}
-
-            error ->
-              error
-          end
-        else
-          {:error, :invoice_not_voidable}
+        cond do
+          not Invoice.voidable?(locked) -> {:error, :invoice_not_voidable}
+          Invoice.has_payments?(locked) -> {:error, :invoice_has_payments}
+          true -> void_row(locked, reason, opts)
         end
+    end
+  end
+
+  defp void_row(locked, reason, opts) do
+    trail = %{
+      "reason" => normalize_reason(reason),
+      "by_uuid" => opts[:actor_uuid],
+      "at" => now_iso()
+    }
+
+    locked
+    |> Invoice.status_changeset("void")
+    |> Ecto.Changeset.put_change(:metadata, Map.put(locked.metadata || %{}, "void", trail))
+    |> repo().update()
+    |> case do
+      {:ok, voided} ->
+        InvoiceEvents.enqueue(:voided, voided)
+        {:ok, voided}
+
+      error ->
+        error
     end
   end
 

@@ -4983,3 +4983,13 @@ msgstr "Кто переместил"
 #, elixir-autogen, elixir-format
 msgid "This order is cancelled and cannot take this invoice."
 msgstr "Заказ отменён, этот счёт к нему не вернуть."
+
+#: lib/phoenix_kit_billing/errors.ex:146
+#, elixir-autogen, elixir-format
+msgid "This invoice has payments and cannot be voided. Issue a refund instead."
+msgstr "По счёту есть оплата — аннулировать нельзя, только возврат."
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:108
+#, elixir-autogen, elixir-format
+msgid "Cannot be voided: it has payments. Refund them instead."
+msgstr "Аннулировать нельзя: есть оплата. Сделайте возврат."

@@ -229,7 +229,9 @@ lib/phoenix_kit_billing/
 | `NumberSequence` | `phoenix_kit_billing_number_sequences` | Counter behind order, invoice, receipt and transaction numbers, one row per (scope, year); created by V7 |
 
 Invoice status workflow: `draft → sent → paid`, with `sent → overdue → paid` and
-`→ void` as the exits.
+`→ void` as the exits. An invoice with a payment on it (`paid_amount > 0`; a partial
+payment leaves the status at `sent`) is not voided: `void_invoice/3` returns
+`{:error, :invoice_has_payments}` and the admin page hides *Void* - refund first.
 
 **The trash.** `Order` and `Invoice` carry `trashed_at` / `trashed_by_uuid` (V8),
 billing's own: `changeset/2` cannot set or clear them, only `trash_order/2`,

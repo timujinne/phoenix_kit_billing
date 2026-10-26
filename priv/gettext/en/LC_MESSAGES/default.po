@@ -4968,3 +4968,13 @@ msgstr "Trashed by"
 #, elixir-autogen, elixir-format
 msgid "This order is cancelled and cannot take this invoice."
 msgstr "This order is cancelled and cannot take this invoice."
+
+#: lib/phoenix_kit_billing/errors.ex:146
+#, elixir-autogen, elixir-format
+msgid "This invoice has payments and cannot be voided. Issue a refund instead."
+msgstr "This invoice has payments and cannot be voided. Issue a refund instead."
+
+#: lib/phoenix_kit_billing/web/invoice_detail.html.heex:108
+#, elixir-autogen, elixir-format
+msgid "Cannot be voided: it has payments. Refund them instead."
+msgstr "Cannot be voided: it has payments. Refund them instead."

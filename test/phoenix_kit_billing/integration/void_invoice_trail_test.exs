@@ -7,7 +7,7 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
   use PhoenixKitBilling.DataCase, async: true
 
   alias PhoenixKitBilling, as: Billing
-  alias PhoenixKitBilling.Invoice
+  alias PhoenixKitBilling.{Invoice, Transaction}
 
   setup do
     {:ok, user: fixture_user()}
@@ -105,6 +105,58 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       stored = Billing.get_invoice!(stale.uuid)
       assert stored.status == "paid"
       refute Map.has_key?(stored.metadata, "void")
+    end
+
+    test "a partly paid invoice is refused and nothing changes", %{user: user} do
+      invoice = sent_invoice(user)
+
+      {:ok, _tx} =
+        Billing.record_payment(invoice, %{amount: "40.00", payment_method: "bank"}, nil)
+
+      partly_paid = Billing.get_invoice!(invoice.uuid)
+      assert partly_paid.status == "sent"
+      assert Invoice.has_payments?(partly_paid)
+
+      assert {:error, :invoice_has_payments} = Billing.void_invoice(partly_paid, "Oops")
+
+      stored = Billing.get_invoice!(invoice.uuid)
+      assert stored.status == "sent"
+      assert Decimal.equal?(stored.paid_amount, "40.00")
+      assert stored.voided_at == nil
+      refute Map.has_key?(stored.metadata, "void")
+      assert Repo.aggregate(Transaction, :count) == 1
+    end
+
+    test "a stale struct cannot void an invoice that took a payment meanwhile", %{user: user} do
+      stale = sent_invoice(user)
+      assert Decimal.equal?(stale.paid_amount, 0)
+
+      {:ok, _tx} =
+        Billing.record_payment(
+          Billing.get_invoice!(stale.uuid),
+          %{amount: "10.00", payment_method: "bank"},
+          nil
+        )
+
+      assert {:error, :invoice_has_payments} = Billing.void_invoice(stale, "Too late")
+
+      stored = Billing.get_invoice!(stale.uuid)
+      assert stored.status == "sent"
+      assert Decimal.equal?(stored.paid_amount, "10.00")
+      refute Map.has_key?(stored.metadata, "void")
+    end
+
+    test "the refusal leaves a caller's transaction usable", %{user: user} do
+      invoice = sent_invoice(user)
+
+      {:ok, _tx} =
+        Billing.record_payment(invoice, %{amount: "40.00", payment_method: "bank"}, nil)
+
+      assert {:ok, :still_usable} =
+               Repo.transaction(fn ->
+                 assert {:error, :invoice_has_payments} = Billing.void_invoice(invoice)
+                 :still_usable
+               end)
     end
 
     test "voiding twice is refused and keeps the first trail", %{user: user} do

@@ -128,6 +128,48 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
       refute has_element?(view, "#invoice-void-mark")
     end
 
+    test "a partly paid invoice has no Void button, and the page says why", %{
+      conn: conn,
+      user: user
+    } do
+      invoice = sent_invoice(user)
+
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
+      assert has_element?(view, "#void-invoice-button")
+      refute has_element?(view, "#void-invoice-unavailable")
+
+      {:ok, _tx} =
+        Billing.record_payment(invoice, %{amount: "40.00", payment_method: "bank"}, nil)
+
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
+      refute has_element?(view, "#void-invoice-button")
+      assert has_element?(view, "#void-invoice-unavailable")
+      assert has_element?(view, "button", "Issue Refund")
+    end
+
+    test "a payment recorded while the modal is open: the void is refused, the page says so", %{
+      conn: conn,
+      user: user
+    } do
+      invoice = sent_invoice(user)
+      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
+      view |> element("#void-invoice-button") |> render_click()
+
+      {:ok, _tx} =
+        Billing.record_payment(
+          Billing.get_invoice!(invoice.uuid),
+          %{amount: "40.00", payment_method: "bank"},
+          nil
+        )
+
+      view |> form("#void-invoice-form", %{"reason" => "Too late"}) |> render_submit()
+
+      assert has_element?(view, "#flash-error", "cannot be voided")
+      assert Billing.get_invoice!(invoice.uuid).status == "sent"
+      refute has_element?(view, "#void-invoice-button")
+      assert has_element?(view, "#void-invoice-unavailable")
+    end
+
     test "an old void invoice without a trail shows the mark and no reason", %{
       conn: conn,
       user: user

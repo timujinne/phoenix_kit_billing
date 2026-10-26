@@ -110,6 +110,13 @@ defmodule PhoenixKitBilling.ErrorsTest do
             "This invoice cannot be sent in its current state."
         )
 
+    test ":invoice_has_payments",
+      do:
+        assert(
+          Errors.message(:invoice_has_payments) ==
+            "This invoice has payments and cannot be voided. Issue a refund instead."
+        )
+
     test ":invoice_not_void",
       do: assert(Errors.message(:invoice_not_void) == "This invoice has not been voided.")
 
