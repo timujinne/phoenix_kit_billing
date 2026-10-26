@@ -2433,8 +2433,10 @@ defmodule PhoenixKitBilling do
   row first (`FOR UPDATE` when it renumbers), before it lifts the counter.
 
   Returns `{:ok, order}`, `{:error, :order_not_editable}`,
-  `{:error, :order_trashed}` for an order in the trash (checked on the stored
-  row too) or `{:error, changeset}`. Refusals are returned, not rolled back, so a
+  `{:error, :order_trashed}` for an order in the trash or `{:error, changeset}`.
+  An order is edited only while its STORED status is `draft` or `pending`, and a
+  status change is refused with `:order_not_editable` when the stored status is
+  no longer the one the struct has - both checked on the locked row. Refusals are returned, not rolled back, so a
   transaction of the caller's stays usable.
   """
   def update_order(%Order{trashed_at: %DateTime{}}, _attrs), do: {:error, :order_trashed}
@@ -2446,11 +2448,11 @@ defmodule PhoenixKitBilling do
 
       changeset = Order.changeset(order, attrs)
 
-      # The order may have gone to the trash since the struct was read: that is
-      # checked on the locked row, before the counter and the write.
+      # The order may have gone to the trash, or on, since the struct was read:
+      # that is checked on the locked row, before the counter and the write.
       result =
         update_numbered(changeset, [order_number: "order"],
-          check: fn -> ensure_order_not_trashed(changeset, order.uuid) end
+          check: fn -> ensure_order_editable(changeset, order) end
         )
 
       case result do
@@ -2831,28 +2833,38 @@ defmodule PhoenixKitBilling do
   end
 
   # Before a write to an order, on the locked row: the order may have gone to
-  # the trash since the caller read it. A change of the number takes the row
-  # `FOR UPDATE` straight away - that is what the write would take anyway, as the
-  # number has a unique index - and any other change `FOR NO KEY UPDATE`, like
+  # the trash, or been moved on (cancelled, confirmed, paid), since the caller
+  # read it. A stored order is edited only while it is a draft or pending, and a
+  # status change asked for is judged against the stored status: the changeset
+  # checked it against the struct's, and a struct that is behind could otherwise
+  # undo a cancellation. A change of the number takes the row `FOR UPDATE`
+  # straight away - that is what the write would take anyway, as the number has a
+  # unique index - and any other change `FOR NO KEY UPDATE`, like
   # `lock_order_row/1`. Either way before the number counter is touched.
-  defp ensure_order_not_trashed(changeset, uuid) do
-    trashed_at =
-      if Map.has_key?(changeset.changes, :order_number) do
-        from(o in Order,
-          where: o.uuid == ^uuid,
-          lock: "FOR UPDATE",
-          select: o.trashed_at
-        )
-      else
-        from(o in Order,
-          where: o.uuid == ^uuid,
-          lock: "FOR NO KEY UPDATE",
-          select: o.trashed_at
-        )
-      end
-      |> repo().one()
+  defp ensure_order_editable(changeset, %Order{uuid: uuid, status: read_status}) do
+    query = from(o in Order, where: o.uuid == ^uuid, select: map(o, [:status, :trashed_at]))
 
-    if trashed_at, do: {:error, :order_trashed}, else: :ok
+    stored =
+      if Map.has_key?(changeset.changes, :order_number),
+        do: query |> lock("FOR UPDATE") |> repo().one(),
+        else: query |> lock("FOR NO KEY UPDATE") |> repo().one()
+
+    cond do
+      is_nil(stored) ->
+        :ok
+
+      stored.trashed_at ->
+        {:error, :order_trashed}
+
+      stored.status not in ~w(draft pending) ->
+        {:error, :order_not_editable}
+
+      Map.has_key?(changeset.changes, :status) and stored.status != read_status ->
+        {:error, :order_not_editable}
+
+      true ->
+        :ok
+    end
   end
 
   @order_sync_types %{
@@ -3347,6 +3359,10 @@ defmodule PhoenixKitBilling do
   @doc """
   Creates an invoice from an order.
 
+  Returns `{:error, :order_trashed}` for an order in the trash and
+  `{:error, :order_cancelled}` for a cancelled one (checked on the stored row,
+  and returned as values: your transaction stays usable).
+
   #{@create_note}
   """
   def create_invoice_from_order(order, opts \\ [])
@@ -3398,6 +3414,10 @@ defmodule PhoenixKitBilling do
 
   @doc """
   Creates a standalone invoice (without order).
+
+  With an `order_uuid` it is held to the same rule as `create_invoice_from_order/2`:
+  `{:error, :order_trashed}` or `{:error, :order_cancelled}` when the order cannot
+  take an invoice.
 
   #{@create_note}
   """

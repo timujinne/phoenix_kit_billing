@@ -243,10 +243,13 @@ invoice refuses every change with `:order_trashed` / `:invoice_trashed`
 `put_order_sync/2` still takes an external system's mark. Every listing, count and
 the dashboard leave the trash out by default (`trashed: :only | :include`
 brings it back), and so do a customer's orders, the invoices preloaded on them
-and `get_order_by_uuid/2`. An invoice cannot be created for, or restored onto,
-an order in the trash or cancelled (`:order_trashed`, `:order_cancelled`): the
-checks lock the order row against `trash_order/2`, and `update_invoice/2` applies
-them when it moves an invoice onto another order. Trashing and restoring do not
+and `get_order_by_uuid/2`. An invoice cannot be created for, or moved onto, an
+order in the trash or a cancelled one (`:order_trashed`, `:order_cancelled`), and
+`restore_invoice/2` refuses an order in the trash (a cancelled order does not
+stop it: the invoice was on it already). The checks lock the order row against
+`trash_order/2`. A stored order is edited only while its stored status is `draft`
+or `pending`: `update_order/2` re-checks that, and any status change, on the
+locked row, so a stale struct cannot undo a cancellation. Trashing and restoring do not
 touch `updated_at`. A void invoice of an order in the trash stays in the invoice
 lists: it is an issued document, and only a draft can be trashed.
 

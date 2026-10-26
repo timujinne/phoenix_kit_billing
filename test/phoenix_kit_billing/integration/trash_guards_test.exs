@@ -220,4 +220,88 @@ defmodule PhoenixKitBilling.Integration.TrashGuardsTest do
       assert invoice.uuid in Enum.map(Billing.list_invoices(%{}), & &1.uuid)
     end
   end
+
+  describe "update_order/2 decides on the stored status" do
+    test "a stale draft cannot un-cancel an order", %{user: user} do
+      stale = order(user)
+      {:ok, _} = Billing.cancel_order(Billing.get_order!(stale.uuid))
+
+      assert {:error, :order_not_editable} =
+               Billing.update_order(stale, %{"status" => "confirmed"})
+
+      stored = Billing.get_order!(stale.uuid)
+      assert stored.status == "cancelled"
+      assert stored.confirmed_at == nil
+    end
+
+    test "a stale draft cannot edit a cancelled order either", %{user: user} do
+      stale = order(user)
+      {:ok, _} = Billing.cancel_order(Billing.get_order!(stale.uuid))
+
+      assert {:error, :order_not_editable} = Billing.update_order(stale, %{"notes" => "late"})
+      assert Billing.get_order!(stale.uuid).notes == nil
+    end
+
+    test "nor a confirmed, paid or refunded one", %{user: user} do
+      stale = order(user)
+      {:ok, confirmed} = Billing.confirm_order(Billing.get_order!(stale.uuid))
+      assert {:error, :order_not_editable} = Billing.update_order(stale, %{"notes" => "late"})
+
+      {:ok, paid} = Billing.mark_order_paid(confirmed)
+      assert {:error, :order_not_editable} = Billing.update_order(stale, %{"notes" => "late"})
+
+      {:ok, _} = Billing.mark_order_refunded(paid)
+      assert {:error, :order_not_editable} = Billing.update_order(stale, %{"notes" => "late"})
+    end
+
+    test "a status change from a struct that is behind the stored status is refused", %{
+      user: user
+    } do
+      stale = order(user)
+
+      {:ok, pending} =
+        Billing.update_order(Billing.get_order!(stale.uuid), %{"status" => "pending"})
+
+      assert {:error, :order_not_editable} =
+               Billing.update_order(stale, %{"status" => "confirmed"})
+
+      assert Billing.get_order!(stale.uuid).status == "pending"
+
+      # From a current struct the same move is fine.
+      assert {:ok, %{status: "confirmed"}} =
+               Billing.update_order(pending, %{"status" => "confirmed"})
+    end
+
+    test "a plain edit of a draft or pending order still works", %{user: user} do
+      order = order(user)
+      assert {:ok, edited} = Billing.update_order(order, %{"notes" => "a"})
+      assert {:ok, _} = Billing.update_order(edited, %{"status" => "pending", "notes" => "b"})
+    end
+
+    test "the refusal leaves the counter alone and a caller's transaction usable", %{user: user} do
+      stale = order(user)
+      {:ok, _} = Billing.cancel_order(Billing.get_order!(stale.uuid))
+      before = counter("order").last_value
+
+      assert {:ok, {:error, :order_not_editable}} =
+               Repo.transaction(fn ->
+                 refusal =
+                   Billing.update_order(stale, %{
+                     "order_number" => "ORD-#{Date.utc_today().year}-9000"
+                   })
+
+                 {:ok, _} =
+                   Billing.create_order(user, %{
+                     "total" => Decimal.new("1.00"),
+                     "currency" => "EUR",
+                     "billing_snapshot" => %{"email" => "g@example.com"}
+                   })
+
+                 refusal
+               end)
+
+      # The create took one number; the refused renumbering lifted nothing.
+      assert counter("order").last_value == before + 1
+    end
+  end
 end

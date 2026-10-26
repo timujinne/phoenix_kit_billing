@@ -315,10 +315,18 @@ defmodule PhoenixKitBilling.Migrations do
     6. The transaction counter, then the receipt counter.
     7. The order row `FOR NO KEY UPDATE` (status transitions, `put_order_sync/2`).
 
-  The exception: paying an invoice (`mark_invoice_paid/2`, `record_payment/3`)
-  takes the invoice row, then the transaction and receipt counters, and only then
-  the linked order's row (`FOR NO KEY UPDATE`, step 7). So a host transaction must
-  not hold an order row and then wait for a transaction or receipt counter.
+  The exception: paying or refunding an invoice (`mark_invoice_paid/2`,
+  `record_payment/3`, and `record_refund/3`, which reaches the order through
+  `refund_order`) takes the invoice row, then the transaction and receipt
+  counters, and only then the linked order's row (`FOR NO KEY UPDATE`, step 7).
+  So a host transaction must not hold an order row and then wait for a
+  transaction or receipt counter.
+
+  Likewise, **a transaction holding an order row must not then wait for one of
+  that order's invoice rows**: `restore_invoice/2` and an `update_invoice/2` that
+  re-links take the invoice row and then the order row (`FOR KEY SHARE`), and
+  paying or refunding take the invoice row and, last, the order row. Take the
+  invoice first.
 
   Because the invoice insert takes the order row before the invoice counter, an
   invoice create and a `trash_order/2` or `delete_order/1` of the same order meet
