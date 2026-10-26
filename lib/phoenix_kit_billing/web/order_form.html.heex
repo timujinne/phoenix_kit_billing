@@ -208,11 +208,7 @@
                 field={@form[:status]}
                 label={gettext("Status")}
                 disabled={is_nil(@order)}
-                options={[
-                  {gettext("Draft"), "draft"},
-                  {gettext("Pending"), "pending"},
-                  {gettext("Confirmed"), "confirmed"}
-                ]}
+                options={status_options(@order)}
               />
             </div>
           </div>

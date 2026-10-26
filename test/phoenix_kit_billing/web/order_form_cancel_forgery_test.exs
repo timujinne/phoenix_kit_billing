@@ -58,4 +58,25 @@ defmodule PhoenixKitBilling.Web.OrderFormCancelForgeryTest do
 
     assert Billing.get_order!(order.uuid).status == "confirmed"
   end
+
+  test "a crafted submit cannot move a pending order back to draft", %{conn: conn, user: user} do
+    order = pending_order(user)
+    {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}/edit")
+
+    render_submit(view, "save", %{"order" => %{"currency" => "EUR", "status" => "draft"}})
+
+    assert Billing.get_order!(order.uuid).status == "pending"
+  end
+
+  test "the status select offers only the statuses reachable from the current one", %{
+    conn: conn,
+    user: user
+  } do
+    order = pending_order(user)
+    {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}/edit")
+
+    refute has_element?(view, "select[name='order[status]'] option[value=draft]")
+    assert has_element?(view, "select[name='order[status]'] option[value=pending]")
+    assert has_element?(view, "select[name='order[status]'] option[value=confirmed]")
+  end
 end

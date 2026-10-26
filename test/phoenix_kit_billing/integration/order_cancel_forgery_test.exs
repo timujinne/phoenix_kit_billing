@@ -87,12 +87,47 @@ defmodule PhoenixKitBilling.Integration.OrderCancelForgeryTest do
       refute Map.has_key?(Billing.get_order!(order.uuid).metadata, "cancelled_from")
     end
 
+    test "refuses to move an order back: pending to draft", %{user: user} do
+      {:ok, order} = create_order(user, %{"status" => "pending"})
+
+      assert {:error, changeset} = Billing.update_order(order, %{"status" => "draft"})
+      assert %{status: [_ | _]} = errors_on(changeset)
+      assert Billing.get_order!(order.uuid).status == "pending"
+    end
+
+    test "refuses a status the order reaches through its own action", %{user: user} do
+      {:ok, order} = create_order(user, %{"status" => "pending"})
+
+      for status <- ~w(paid refunded) do
+        assert {:error, changeset} = Billing.update_order(order, %{"status" => status})
+        assert %{status: [_ | _]} = errors_on(changeset)
+      end
+
+      assert Billing.get_order!(order.uuid).status == "pending"
+    end
+
+    test "the transition functions are unaffected", %{user: user} do
+      {:ok, order} = create_order(user, %{"status" => "pending"})
+      assert {:ok, confirmed} = Billing.confirm_order(order)
+      assert {:ok, paid} = Billing.mark_order_paid(confirmed)
+      assert {:ok, refunded} = Billing.mark_order_refunded(paid)
+      assert refunded.status == "refunded"
+
+      {:ok, other} = create_order(user)
+      assert {:ok, %{status: "cancelled"}} = Billing.cancel_order(other)
+    end
+
     test "still moves a draft along its legitimate statuses", %{user: user} do
       {:ok, order} = create_order(user)
 
       assert {:ok, pending} = Billing.update_order(order, %{"status" => "pending"})
       assert {:ok, confirmed} = Billing.update_order(pending, %{"status" => "confirmed"})
       assert confirmed.status == "confirmed"
+
+      {:ok, other} = create_order(user)
+
+      assert {:ok, %{status: "confirmed"}} =
+               Billing.update_order(other, %{"status" => "confirmed"})
     end
   end
 

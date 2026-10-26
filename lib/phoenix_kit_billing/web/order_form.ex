@@ -289,6 +289,20 @@ defmodule PhoenixKitBilling.Web.OrderForm do
     end)
   end
 
+  # The statuses the form can set from the current one (see `Order.changeset/2`):
+  # the order's own and the ones ahead of it, never one behind.
+  defp status_options(%{status: "pending"}) do
+    [{gettext("Pending"), "pending"}, {gettext("Confirmed"), "confirmed"}]
+  end
+
+  defp status_options(_order) do
+    [
+      {gettext("Draft"), "draft"},
+      {gettext("Pending"), "pending"},
+      {gettext("Confirmed"), "confirmed"}
+    ]
+  end
+
   defp save_order(socket, params) do
     result =
       if socket.assigns.order do
