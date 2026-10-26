@@ -234,7 +234,8 @@ PhoenixKitBilling.list_orders(%{trashed: :only})    # :include for both
   trash or a cancelled one (`:order_trashed`, `:order_cancelled`). An invoice
   trashed from a cancelled order stays in the trash while the order is cancelled
   (its number stays used).
-- Trashing and restoring leave `updated_at` as it was.
+- Trashing and restoring leave `updated_at` as it was. They move an order's revision,
+  so an external system that holds it (`sync` back to `pending`) takes it again.
 - Restoring a trashed draft invoice puts back its old figures. If the order's
   lines changed meanwhile, the invoice no longer matches them: check it before
   sending.

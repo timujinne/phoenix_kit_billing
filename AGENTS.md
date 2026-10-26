@@ -268,7 +268,8 @@ while the order is cancelled (its number stays used). The checks lock the order 
 `trash_order/2`. A stored order is edited only while its stored status is `draft`
 or `pending`: `update_order/2` re-checks that, and any status change, on the
 locked row, so a stale struct cannot undo a cancellation. Trashing and restoring do not
-touch `updated_at`. `trash_order/2` takes an optional `:reason`, appended to the stored
+touch `updated_at`, but move an order's revision (`trashed_at` is a revision field), so
+an external system that holds the order takes it again (1C marks it for deletion). `trash_order/2` takes an optional `:reason`, appended to the stored
 `internal_notes` as `Trashed <date>: <reason>` (as `cancel_order/3` does for cancels).
 A void invoice of an order in the trash stays in the invoice lists: it is an issued
 document, and only a draft can be trashed.

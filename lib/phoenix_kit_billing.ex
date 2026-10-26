@@ -2832,7 +2832,8 @@ defmodule PhoenixKitBilling do
     `"Trashed <YYYY-MM-DD HH:MM UTC>: <reason>"`, after a blank line when there
     are notes already, in the same write as the trash fields. Without one, or
     with a blank one, the notes are not touched. `updated_at` is not touched
-    either way.
+    either way; the revision moves (see `Order`'s moduledoc), and so it does on
+    `restore_order/2`.
 
   Takes a row lock on the order and decides on the stored row, not the struct's:
   the order may have been confirmed, or been given an invoice, since it was read.
