@@ -13,6 +13,7 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
   alias PhoenixKitBilling.Events
   alias PhoenixKitBilling.Invoice
   alias PhoenixKitBilling.Order
+  alias PhoenixKitBilling.Test.NumberClock
   alias PhoenixKitBilling.Transaction
 
   @sequences "phoenix_kit_billing_number_sequences"
@@ -91,6 +92,19 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
       assert new_order(user).order_number == number("ORD", 1)
       assert new_order(user).order_number == number("ORD", 2)
       assert last_value("order") == 2
+    end
+
+    test "a nil or blank order_number is not a supplied one", %{user: user} do
+      blanks = [
+        %{"order_number" => nil},
+        %{"order_number" => ""},
+        %{"order_number" => "  "},
+        %{order_number: nil}
+      ]
+
+      numbers = for blank <- blanks, do: new_order(user, blank).order_number
+      assert numbers == for(n <- 1..4, do: number("ORD", n))
+      assert last_value("order") == 4
     end
 
     test "deleting an order of the year does not free its number", %{user: user} do
@@ -389,6 +403,51 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
       assert %{invoice_number: [_]} = errors_on(changeset)
     end
 
+    test "a nil or blank invoice_number is not a supplied one", %{user: user} do
+      string_keyed = %{
+        "total" => Decimal.new("10.00"),
+        "currency" => "EUR",
+        "billing_details" => %{"email" => "b@example.com"}
+      }
+
+      assert {:ok, a} = standalone(user, %{invoice_number: nil})
+      assert {:ok, b} = standalone(user, %{invoice_number: ""})
+      assert {:ok, c} = Billing.create_invoice(user, Map.put(string_keyed, "invoice_number", nil))
+      assert {:ok, d} = Billing.create_invoice(user, Map.put(string_keyed, "invoice_number", " "))
+
+      assert Enum.map([a, b, c, d], & &1.invoice_number) ==
+               for(n <- 1..4, do: number("INV", n))
+
+      assert last_value("invoice") == 4
+    end
+
+    test "string-keyed attributes get a generated number too", %{user: user} do
+      attrs = %{
+        "total" => Decimal.new("10.00"),
+        "currency" => "EUR",
+        "billing_details" => %{"email" => "b@example.com"}
+      }
+
+      assert {:ok, invoice} = Billing.create_invoice(user, attrs)
+      assert invoice.invoice_number == number("INV", 1)
+    end
+
+    test "a supplied number under a string key counts as supplied too", %{user: user} do
+      attrs = %{
+        "total" => Decimal.new("10.00"),
+        "currency" => "EUR",
+        "billing_details" => %{"email" => "b@example.com"},
+        "invoice_number" => number("INV", 5)
+      }
+
+      assert {:ok, invoice} = Billing.create_invoice(user, attrs)
+      assert invoice.invoice_number == number("INV", 5)
+      assert last_value("invoice") == 5
+
+      assert {:ok, next} = standalone(user)
+      assert next.invoice_number == number("INV", 6)
+    end
+
     test "a supplied number ahead of the counter lifts it without using a value", %{user: user} do
       assert {:ok, first} = standalone(user)
       assert {:ok, supplied} = standalone(user, %{invoice_number: number("INV", 5)})
@@ -499,6 +558,21 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
       other = order |> new_invoice() |> sent()
       assert {:ok, paid} = Billing.mark_invoice_paid(other)
       assert paid.receipt_number == number("RCP", 10)
+    end
+
+    test "a receipt number of this year written long before it still counts", %{order: order} do
+      invoice = order |> new_invoice() |> sent()
+
+      invoice
+      |> Ecto.Changeset.change(%{
+        receipt_number: number("RCP", 50),
+        receipt_generated_at: DateTime.new!(Date.new!(year() - 1, 6, 1), ~T[12:00:00])
+      })
+      |> Repo.update!()
+
+      other = order |> new_invoice() |> sent()
+      assert {:ok, paid} = Billing.mark_invoice_paid(other)
+      assert paid.receipt_number == number("RCP", 51)
     end
 
     test "the receipts of another year do not count", %{order: order} do
@@ -706,6 +780,153 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
 
       forget_counter()
       assert new_order(user).order_number == number("ORD", 1)
+    end
+  end
+
+  describe "the rows of the year are counted by their timestamp" do
+    # Numbers that are not in the counter's shape, so only the row count can
+    # place the next number.
+    defp boundary_instants do
+      y = year()
+
+      [
+        DateTime.new!(Date.new!(y - 1, 12, 31), ~T[23:59:59]),
+        DateTime.new!(Date.new!(y, 1, 1), ~T[00:00:00]),
+        DateTime.new!(Date.new!(y, 12, 31), ~T[23:59:59]),
+        DateTime.new!(Date.new!(y + 1, 1, 1), ~T[00:00:00])
+      ]
+    end
+
+    test "orders: the last second before the year and the first after it are out", %{user: user} do
+      for {at, n} <- Enum.with_index(boundary_instants(), 1),
+          do: insert_order(user, "LEGACY-#{n}", inserted_at: at)
+
+      forget_counter()
+      assert new_order(user).order_number == number("ORD", 3)
+    end
+
+    test "invoices: the last second before the year and the first after it are out", %{
+      user: user
+    } do
+      order = new_order(user)
+
+      for {at, n} <- Enum.with_index(boundary_instants(), 1) do
+        {:ok, invoice} = Billing.create_invoice_from_order(order, invoice_number: "LEGACY-#{n}")
+
+        Repo.update_all(from(i in Invoice, where: i.uuid == ^invoice.uuid),
+          set: [inserted_at: at]
+        )
+      end
+
+      forget_counter()
+      assert new_invoice(order).invoice_number == number("INV", 3)
+    end
+
+    test "transactions: the last second before the year and the first after it are out", %{
+      user: user
+    } do
+      invoice = user |> new_order() |> new_invoice() |> sent()
+
+      for {at, n} <- Enum.with_index(boundary_instants(), 1) do
+        Repo.insert!(%Transaction{
+          transaction_number: "LEGACY-#{n}",
+          amount: Decimal.new("1.00"),
+          currency: "EUR",
+          payment_method: "bank",
+          invoice_uuid: invoice.uuid,
+          user_uuid: invoice.user_uuid,
+          inserted_at: at,
+          updated_at: at
+        })
+      end
+
+      forget_counter()
+      assert Billing.generate_transaction_number() == number("TXN", 3)
+    end
+
+    test "receipts: the last second before the year and the first after it are out", %{
+      user: user
+    } do
+      order = new_order(user)
+
+      for {at, n} <- Enum.with_index(boundary_instants(), 1) do
+        order
+        |> new_invoice()
+        |> Ecto.Changeset.change(%{receipt_number: "LEGACY-#{n}", receipt_generated_at: at})
+        |> Repo.update!()
+      end
+
+      forget_counter()
+      paid = order |> new_invoice() |> sent() |> Billing.mark_invoice_paid()
+      assert {:ok, %Invoice{receipt_number: receipt}} = paid
+      assert receipt == number("RCP", 3)
+    end
+  end
+
+  describe "the year of a number is read once per operation" do
+    # The first read says this year, any later one the next: an operation that
+    # reads the clock again would draw a number of the new year.
+    defp clock_flips_after_first_read do
+      NumberClock.set([
+        Date.new!(year(), 12, 31),
+        Date.new!(year() + 1, 1, 1)
+      ])
+    end
+
+    test "a create that skips a taken number and retries stays in one year", %{user: user} do
+      insert_order(user, number("ORD", 1))
+      rewind("order", 0)
+
+      clock_flips_after_first_read()
+      order = new_order(user)
+
+      assert order.order_number == number("ORD", 2)
+      assert NumberClock.reads() == 1
+      assert last_value("order", year() + 1) == nil
+    end
+
+    test "an update that changes two numbers stays in one year", %{user: user} do
+      invoice = user |> new_order() |> new_invoice()
+
+      clock_flips_after_first_read()
+
+      assert {:ok, _} =
+               Billing.update_invoice(invoice, %{
+                 invoice_number: number("INV", 20),
+                 receipt_number: number("RCP", 30)
+               })
+
+      assert NumberClock.reads() == 1
+      assert {last_value("invoice"), last_value("receipt")} == {20, 30}
+      assert {last_value("invoice", year() + 1), last_value("receipt", year() + 1)} == {nil, nil}
+    end
+
+    test "generate_transaction_number/0 reads it once" do
+      clock_flips_after_first_read()
+
+      assert Billing.generate_transaction_number() == number("TXN", 1)
+      assert NumberClock.reads() == 1
+    end
+
+    test "generate_receipt/1 reads it once", %{user: user} do
+      invoice = user |> new_order() |> new_invoice() |> sent()
+
+      {:ok, partly} =
+        invoice |> Ecto.Changeset.change(%{paid_amount: Decimal.new("4.00")}) |> Repo.update()
+
+      clock_flips_after_first_read()
+
+      assert {:ok, receipt} = Billing.generate_receipt(partly)
+      assert receipt.receipt_number == number("RCP", 1)
+      assert NumberClock.reads() == 1
+    end
+
+    test "a supplied number is lifted into the year the operation started in", %{user: user} do
+      clock_flips_after_first_read()
+      assert {:ok, _} = standalone(user, %{invoice_number: number("INV", 7)})
+
+      assert NumberClock.reads() == 1
+      assert last_value("invoice") == 7
     end
   end
 

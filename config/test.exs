@@ -42,6 +42,9 @@ config :phoenix_kit_billing, PhoenixKitBilling.Test.Endpoint,
   url: [host: "localhost"],
   render_errors: [formats: [html: PhoenixKitBilling.Test.Layouts]]
 
+# The date that numbers are given a year by: a test can pin it.
+config :phoenix_kit_billing, :number_clock, PhoenixKitBilling.Test.NumberClock
+
 config :phoenix, :json_library, Jason
 
 config :logger, level: :warning

@@ -58,7 +58,7 @@ defmodule PhoenixKitBilling.MigrationsAdoptionTest do
       end
     end
 
-    test "down from V6 only rewrites the marker" do
+    test "down to 5 rewrites the marker and drops the V7 counter and the V8 trash columns" do
       assert [marker] = (Migrations.down_statements("public", 5) -- v7_drop()) -- v8_drop()
       assert marker =~ "pkb_schema:5"
     end

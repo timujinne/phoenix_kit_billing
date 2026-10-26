@@ -242,8 +242,18 @@ defmodule PhoenixKitBilling.Migrations do
   to 20 times, each skipped number staying used up. If all 20 are taken the
   create returns `{:error, changeset}` with an error on the number field and
   the counter left past them. Only numbers zero-padded to four digits or more
-  (`ORD-2026-0007`, as the counter writes them) count. Receipts have no unique
-  index, so nothing is skipped there.
+  (`ORD-2026-0007`, as the counter writes them) count.
+
+  Receipts have no unique index on purpose: a receipt number is written by an
+  `UPDATE` inside the payment transaction, and a unique violation there would
+  roll back the money record - the opposite of what a number clash deserves.
+  So nothing is skipped for receipts, and the counter's only guard against a
+  reissue is the seed. The seed reads orders, invoices and transactions from the
+  last day of the previous year on (a number of this year sits on a row made
+  this year, give or take a day for the clock, and a miss is skipped on the
+  unique index), but the receipt seed is unwindowed: it reads every receipt
+  number, once per scope-year, so a `RCP-<year>-NNNN` written long before the
+  year (set by hand in late December, clock skew) is seen.
 
   **Run V7 before the code that uses it.** Without the table every create
   raises `undefined_table`. Old nodes that still number by `count + 1` can keep
