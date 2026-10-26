@@ -77,14 +77,17 @@ defmodule PhoenixKitBilling.Schemas.TrashFieldsTest do
     test "set and clear exactly the two fields" do
       for module <- [Order, Invoice] do
         trashed = module.trash_changeset(struct(module), @actor)
-        assert Map.keys(trashed.changes) |> Enum.sort() == [:trashed_at, :trashed_by_uuid]
+        # updated_at is forced to what it is: trashing is not an edit.
+        assert Map.keys(trashed.changes) |> Enum.sort() ==
+                 [:trashed_at, :trashed_by_uuid, :updated_at]
+
         assert trashed.changes.trashed_by_uuid == @actor
         assert %DateTime{} = trashed.changes.trashed_at
 
         restored =
           module.restore_changeset(struct(module, trashed_at: @now, trashed_by_uuid: @actor))
 
-        assert restored.changes == %{trashed_at: nil, trashed_by_uuid: nil}
+        assert restored.changes == %{trashed_at: nil, trashed_by_uuid: nil, updated_at: nil}
       end
     end
 

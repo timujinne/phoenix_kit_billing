@@ -79,6 +79,7 @@ defmodule PhoenixKitBilling.Errors do
           | :not_supported
           | :not_trashed
           | :order_has_invoices
+          | :order_cancelled
           | :order_has_open_invoices
           | :order_not_cancellable
           | :order_not_editable
@@ -189,6 +190,9 @@ defmodule PhoenixKitBilling.Errors do
   def message(:order_has_invoices),
     do: gettext("This order has invoices and cannot be deleted.")
 
+  def message(:order_cancelled),
+    do: gettext("This order is cancelled and cannot take a new invoice.")
+
   def message(:order_has_open_invoices),
     do: gettext("This order has an invoice that is neither void nor in the trash.")
 
@@ -203,6 +207,7 @@ defmodule PhoenixKitBilling.Errors do
     do: gettext("Only a draft or cancelled order can be moved to the trash.")
 
   def message(:order_trashed), do: gettext("This order is in the trash. Restore it to change it.")
+
   def message(:payment_method_expired), do: gettext("The payment method has expired.")
   def message(:payment_method_not_usable), do: gettext("This payment method cannot be used.")
   def message(:processing_error), do: gettext("An error occurred while processing the payment.")

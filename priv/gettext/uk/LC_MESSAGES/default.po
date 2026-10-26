@@ -4835,3 +4835,8 @@ msgstr "Переміщено"
 #, elixir-autogen, elixir-format
 msgid "Trashed by"
 msgstr "Хто перемістив"
+
+#: lib/phoenix_kit_billing/errors.ex:194
+#, elixir-autogen, elixir-format
+msgid "This order is cancelled and cannot take a new invoice."
+msgstr "Це замовлення скасовано, на нього не можна виставити новий рахунок."

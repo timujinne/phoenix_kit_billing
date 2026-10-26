@@ -295,6 +295,13 @@ defmodule PhoenixKitBilling.ErrorsTest do
             "This invoice is in the trash. Restore it to change it."
         )
 
+    test ":order_cancelled",
+      do:
+        assert(
+          Errors.message(:order_cancelled) ==
+            "This order is cancelled and cannot take a new invoice."
+        )
+
     test ":order_not_trashable",
       do:
         assert(

@@ -261,13 +261,30 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
       assert has_element?(view, "#order-trashed-badge")
     end
 
-    test "the edit page refuses to save it, with a message", %{conn: conn, order: order} do
-      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}/edit")
+    test "the edit page sends you back to the order, with a message", %{
+      conn: conn,
+      order: order
+    } do
+      assert {:error, {:live_redirect, %{to: to, flash: flash}}} =
+               live(conn, "/en/admin/billing/orders/#{order.uuid}/edit")
+
+      assert to =~ "/admin/billing/orders/#{order.uuid}"
+      refute to =~ "/edit"
+      assert flash["error"] =~ "in the trash"
+    end
+
+    test "an order trashed while its edit page was open refuses the save, with a message", %{
+      conn: conn,
+      user: user
+    } do
+      fresh = order(user)
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{fresh.uuid}/edit")
+      {:ok, _} = Billing.trash_order(fresh)
 
       render_hook(view, "save", %{"order" => %{"notes" => "late"}})
 
       assert has_element?(view, "#flash-error", "in the trash")
-      assert Billing.get_order!(order.uuid).notes == nil
+      assert Billing.get_order!(fresh.uuid).notes == nil
     end
   end
 
@@ -331,12 +348,13 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
       conn: conn,
       user: user
     } do
-      {:ok, trashed} = Billing.trash_order(order(user))
-      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{trashed.uuid}/edit")
+      fresh = order(user)
+      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{fresh.uuid}/edit")
+      {:ok, _} = Billing.trash_order(fresh)
 
       render_hook(view, "save", %{"order" => %{"trashed_at" => nil, "trashed_by_uuid" => nil}})
 
-      assert Order.trashed?(Billing.get_order!(trashed.uuid))
+      assert Order.trashed?(Billing.get_order!(fresh.uuid))
     end
   end
 

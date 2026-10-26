@@ -103,6 +103,11 @@ defmodule PhoenixKitBilling.Web.OrderForm do
         |> put_flash(:error, gettext("Order not found"))
         |> push_navigate(to: Routes.path("/admin/billing/orders"))
 
+      %Order{trashed_at: %DateTime{}} = order ->
+        socket
+        |> put_flash(:error, Errors.message(:order_trashed))
+        |> push_navigate(to: Paths.order_detail(order.uuid))
+
       order ->
         changeset = Billing.change_order(order)
         line_items = parse_line_items(order.line_items)
