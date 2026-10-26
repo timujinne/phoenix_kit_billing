@@ -2634,7 +2634,11 @@ defmodule PhoenixKitBilling do
   (paying it does not move a cancelled order). Then the order does not stay at
   the status it went back to: it is confirmed (when it went back to `"draft"` or
   `"pending"`) and marked paid, in the same transaction, as a payment of the
-  invoice would have done.
+  invoice would have done. An invoice partly refunded since (still `"paid"`,
+  with less than its total paid) does not count. A payment or a refund of the
+  invoice that runs at the same time waits for the order row and then sees the
+  reinstated order, so the order ends up paid (or refunded) whichever commits
+  first.
 
   ## Options
 
@@ -2650,7 +2654,8 @@ defmodule PhoenixKitBilling do
   Returns `{:ok, order}` (the order as it ends up), `{:error,
   :order_not_reinstatable}` when the stored status is not `"cancelled"`,
   `{:error, :order_trashed}`, or `{:error, changeset}`. Refusals are returned,
-  not rolled back. On success an `:order_reinstated` event is broadcast, then
+  not rolled back. A settlement that fails after the order was written rolls
+  the whole reinstate back (and with it a transaction of the caller's). On success an `:order_reinstated` event is broadcast, then
   `:order_confirmed` and `:order_paid` when a paid invoice settled the order.
   """
   def reinstate_order(%Order{} = order, reason \\ nil, opts \\ []) do
@@ -2659,7 +2664,13 @@ defmodule PhoenixKitBilling do
     result =
       unwrap_transaction(fn ->
         with {:ok, reinstated} <- reinstate_order_transition(order, reason, opts) do
-          {:ok, {reinstated, settle_reinstated_order(reinstated)}}
+          # The order is written already: a settlement that fails takes the
+          # reinstate back with it rather than leave a paid invoice on an
+          # unpaid order.
+          case settle_reinstated_order(reinstated) do
+            {:ok, broadcasts} -> {:ok, {reinstated, broadcasts}}
+            {:error, failure} -> repo().rollback(failure)
+          end
         end
       end)
 
@@ -2693,18 +2704,47 @@ defmodule PhoenixKitBilling do
   end
 
   # Inside reinstate_order/3's transaction, with the order row locked: an
-  # invoice paid while the order was cancelled settles it now. Returns the
-  # broadcasts to send after the commit.
-  defp settle_reinstated_order(%Order{uuid: uuid}) do
-    paid_invoice =
-      from(i in Invoice,
-        where: i.order_uuid == ^uuid and i.status == "paid" and is_nil(i.trashed_at),
-        order_by: [asc: i.paid_at],
-        limit: 1
-      )
-      |> repo().one()
+  # invoice paid while the order was cancelled settles it now. Only one whose
+  # money is still there: a partial refund leaves an invoice `paid` with less
+  # than its total (a full one voids it). Returns `{:ok, broadcasts}` to send
+  # after the commit, or the first failure.
+  #
+  # The invoice is read, not locked (the order row is held, and the lock order
+  # takes an invoice row before its order's). A payment that commits meanwhile
+  # is not missed: paying an invoice reads its order's status under the order
+  # row lock (`maybe_mark_linked_order_paid/1`), so it waits for this
+  # transaction and then pays the order it reinstated; one that committed
+  # before is seen here.
+  defp settle_reinstated_order(%Order{uuid: uuid} = order) do
+    from(i in Invoice,
+      where:
+        i.order_uuid == ^uuid and i.status == "paid" and is_nil(i.trashed_at) and
+          i.paid_amount >= i.total,
+      order_by: [asc: i.paid_at],
+      limit: 1
+    )
+    |> repo().one()
+    |> case do
+      nil -> {:ok, []}
+      invoice -> pay_reinstated_order(order, invoice)
+    end
+  end
 
-    if paid_invoice, do: maybe_mark_linked_order_paid(paid_invoice), else: []
+  defp pay_reinstated_order(order, invoice) do
+    payment_method =
+      invoice |> repo().preload(:transactions) |> Invoice.primary_payment_method()
+
+    with {:ok, confirmed, broadcasts} <- confirm_reinstated_order(order),
+         {:ok, paid} <- pay_order(confirmed, payment_method: payment_method) do
+      {:ok, broadcasts ++ [{:broadcast_order_paid, paid}]}
+    end
+  end
+
+  defp confirm_reinstated_order(%Order{status: "confirmed"} = order), do: {:ok, order, []}
+
+  defp confirm_reinstated_order(order) do
+    with {:ok, confirmed} <- confirm_order_transition(order),
+         do: {:ok, confirmed, [{:broadcast_order_confirmed, confirmed}]}
   end
 
   defp put_reason_note(changeset, _label, _notes, nil), do: changeset
@@ -6706,28 +6746,41 @@ defmodule PhoenixKitBilling do
   # transaction. Both callers publish the returned events after it commits.
   defp maybe_mark_linked_order_paid(%{order_uuid: nil}), do: []
 
+  # The order's status is read under its row lock (step 7 of the lock order in
+  # `PhoenixKitBilling.Migrations`, after the invoice row), held until the
+  # transaction ends, or for this call's own when the payment has committed
+  # already. A `reinstate_order/3` in flight holds that row: the payment waits
+  # for it and pays the order it reinstated, instead of reading the order as
+  # still cancelled while the reinstate, which cannot see the uncommitted
+  # payment, leaves it unpaid.
   defp maybe_mark_linked_order_paid(%{order_uuid: order_uuid} = invoice) do
     # Get the primary payment method from the invoice's transactions
     invoice_with_txns = repo().preload(invoice, :transactions)
     payment_method = Invoice.primary_payment_method(invoice_with_txns)
 
-    case get_order!(order_uuid) do
-      %Order{status: "confirmed"} = order ->
-        order_paid_broadcasts(order, payment_method)
+    unwrap_transaction(fn ->
+      case lock_linked_order(order_uuid) do
+        %Order{status: "confirmed"} = order ->
+          order_paid_broadcasts(order, payment_method)
 
-      %Order{status: status} = order when status in ["draft", "pending"] ->
-        case confirm_order_transition(order) do
-          {:ok, confirmed} ->
-            paid_broadcasts = order_paid_broadcasts(confirmed, payment_method)
-            [{:broadcast_order_confirmed, confirmed} | paid_broadcasts]
+        %Order{status: status} = order when status in ["draft", "pending"] ->
+          case confirm_order_transition(order) do
+            {:ok, confirmed} ->
+              paid_broadcasts = order_paid_broadcasts(confirmed, payment_method)
+              [{:broadcast_order_confirmed, confirmed} | paid_broadcasts]
 
-          _ ->
-            []
-        end
+            _ ->
+              []
+          end
 
-      _ ->
-        []
-    end
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp lock_linked_order(order_uuid) do
+    Order |> where([o], o.uuid == ^order_uuid) |> lock("FOR NO KEY UPDATE") |> repo().one()
   end
 
   defp order_paid_broadcasts(order, payment_method) do
@@ -6740,8 +6793,11 @@ defmodule PhoenixKitBilling do
   # Returns the broadcasts to send once the surrounding transaction commits.
   defp maybe_mark_linked_order_refunded(%{order_uuid: nil}), do: []
 
+  # Under the order row lock, like `maybe_mark_linked_order_paid/1`: a full
+  # refund that meets a reinstate settling the order on this invoice waits for
+  # it and refunds the order it paid.
   defp maybe_mark_linked_order_refunded(%{order_uuid: order_uuid}) do
-    case get_order!(order_uuid) do
+    case lock_linked_order(order_uuid) do
       %Order{status: "paid"} = order ->
         case refund_order(order) do
           {:ok, refunded} -> [{:broadcast_order_refunded, refunded}]

@@ -198,7 +198,9 @@ under `billing.manage_orders`, with an optional reason):
   an order cancelled before that was recorded). `cancelled_at` is cleared and the
   revision moves on, so an external system takes the order again.
 - If one of its invoices was paid while it was cancelled, the order is confirmed
-  and marked paid in the same transaction.
+  and marked paid in the same transaction (not for an invoice partly refunded
+  since). A payment or refund of that invoice running at the same time waits for
+  the reinstate, so the order ends up paid (or refunded) whichever commits first.
 - The trail is in `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`);
   a reason is also appended to `internal_notes` as `Reinstated <date>: <reason>`.
 - Only a `cancelled` order: anything else returns

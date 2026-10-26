@@ -270,6 +270,46 @@ defmodule PhoenixKitBilling.Integration.ReinstateOrderTest do
       assert reinstated.metadata["reinstated"]["status"] == "pending"
     end
 
+    test "an order cancelled from draft is confirmed, then paid", %{user: user} do
+      draft = create_order(user)
+      invoice = sent_invoice_for(draft)
+      cancelled = cancel(draft)
+      {:ok, _} = Billing.mark_invoice_paid(invoice)
+
+      assert {:ok, reinstated} = Billing.reinstate_order(cancelled)
+
+      assert reinstated.status == "paid"
+      assert %DateTime{} = reinstated.confirmed_at
+      assert reinstated.metadata["reinstated"]["status"] == "draft"
+    end
+
+    test "an invoice partly refunded since does not make the order paid", %{user: user} do
+      {:ok, confirmed} = Billing.confirm_order(create_order(user))
+      invoice = sent_invoice_for(confirmed)
+      cancelled = cancel(confirmed)
+      {:ok, paid_invoice} = Billing.mark_invoice_paid(invoice)
+      {:ok, _tx} = Billing.record_refund(paid_invoice, %{amount: "40.00", reason: "x"}, nil)
+
+      refunded_in_part = Billing.get_invoice!(invoice.uuid)
+      assert refunded_in_part.status == "paid"
+      assert Decimal.lt?(refunded_in_part.paid_amount, refunded_in_part.total)
+
+      assert {:ok, reinstated} = Billing.reinstate_order(cancelled)
+      assert reinstated.status == "confirmed"
+    end
+
+    test "an invoice refunded in full (void) leaves the order where it was", %{user: user} do
+      {:ok, confirmed} = Billing.confirm_order(create_order(user))
+      invoice = sent_invoice_for(confirmed)
+      cancelled = cancel(confirmed)
+      {:ok, paid_invoice} = Billing.mark_invoice_paid(invoice)
+      {:ok, _tx} = Billing.record_refund(paid_invoice, %{amount: "99.00", reason: "x"}, nil)
+      assert Billing.get_invoice!(invoice.uuid).status == "void"
+
+      assert {:ok, reinstated} = Billing.reinstate_order(cancelled)
+      assert reinstated.status == "confirmed"
+    end
+
     test "an open, unpaid invoice leaves the order where it was", %{user: user} do
       {:ok, confirmed} = Billing.confirm_order(create_order(user))
       _invoice = sent_invoice_for(confirmed)

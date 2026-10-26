@@ -79,7 +79,9 @@ defmodule PhoenixKitBilling.Order do
 
   A cancelled order can be reinstated (`PhoenixKitBilling.reinstate_order/3`):
   it goes back to the status it was cancelled from (`reinstated_status/1`).
-  `refunded` is final.
+  `refunded` is final. `metadata["reinstated"]` keeps only the latest
+  reinstatement, as `cancelled_from` keeps only the latest cancellation; the
+  earlier ones are in `internal_notes` (when a reason was given) and Activity.
 
   ## Line Item Structure
 
