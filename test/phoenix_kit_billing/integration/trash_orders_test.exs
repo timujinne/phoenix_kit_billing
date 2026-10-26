@@ -43,7 +43,7 @@ defmodule PhoenixKitBilling.Integration.TrashOrdersTest do
   end
 
   describe "trash_order/2" do
-    test "trashes a draft order: when, by whom, and nothing else changes", %{
+    test "trashes a draft order: when, by whom, the revision moves, nothing else changes", %{
       user: user,
       actor: actor
     } do
@@ -61,8 +61,27 @@ defmodule PhoenixKitBilling.Integration.TrashOrdersTest do
       assert row.trashed_at == trashed.trashed_at
       assert row.trashed_by_uuid == actor
       assert row.status == "draft"
-      assert row.metadata == order.metadata
-      assert Order.revision(row) == before_revision
+      assert Map.delete(row.metadata, "revision") == Map.delete(order.metadata, "revision")
+      # an external system takes the order again (1C puts a deletion mark on it)
+      assert Order.revision(row) == before_revision + 1
+    end
+
+    test "an order an external system holds reads as pending again", %{user: user} do
+      {:ok, cancelled} = Billing.cancel_order(create_order(user), "x")
+
+      {:ok, marked} =
+        Billing.put_order_sync(cancelled, %{state: "synced", revision: Order.revision(cancelled)})
+
+      assert {:ok, trashed} = Billing.trash_order(marked)
+      assert Order.sync(trashed)["state"] == "pending"
+      assert Order.revision(trashed) == Order.revision(cancelled) + 1
+
+      {:ok, marked} =
+        Billing.put_order_sync(trashed, %{state: "synced", revision: Order.revision(trashed)})
+
+      assert {:ok, restored} = Billing.restore_order(marked)
+      assert Order.sync(restored)["state"] == "pending"
+      assert Order.revision(restored) == Order.revision(trashed) + 1
     end
 
     test "trashes a cancelled order and leaves it cancelled", %{user: user, actor: actor} do
@@ -319,7 +338,15 @@ defmodule PhoenixKitBilling.Integration.TrashOrdersTest do
       refute Order.trashed?(row)
       assert row.trashed_by_uuid == nil
       assert row.status == "draft"
-      assert Order.revision(row) == Order.revision(trashed)
+      assert Order.revision(row) == Order.revision(trashed) + 1
+    end
+
+    test "updated_at stays what it was", %{user: user, actor: actor} do
+      trashed = trashed(user, actor)
+
+      assert {:ok, restored} = Billing.restore_order(trashed)
+      assert restored.updated_at == trashed.updated_at
+      assert stored(trashed).updated_at == trashed.updated_at
     end
 
     test "an order that is not in the trash is refused", %{user: user} do
