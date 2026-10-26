@@ -253,6 +253,30 @@ The jobs run on the `billing` queue, which the module declares through
 `mix phoenix_kit.doctor` reports it when it is missing. Without it the jobs wait
 and nothing fails.
 
+### Reinstating a cancelled order
+
+A cancelled order can be taken back (*Reinstate order* on the admin order page,
+under `billing.manage_orders`, with an optional reason):
+
+```elixir
+{:ok, order} = PhoenixKitBilling.reinstate_order(order, "Customer called back", actor_uuid: admin.uuid)
+{:ok, order} = PhoenixKitBilling.reinstate_order(order, "Refused by the ERP")  # by the system
+```
+
+- The order goes back to the status it was cancelled from
+  (`metadata["cancelled_from"]`: `draft`, `pending` or `confirmed`; `pending` for
+  an order cancelled before that was recorded). `cancelled_at` is cleared and the
+  revision moves on, so an external system takes the order again.
+- If one of its invoices was paid while it was cancelled, the order is confirmed
+  and marked paid in the same transaction.
+- The trail is in `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`);
+  a reason is also appended to `internal_notes` as `Reinstated <date>: <reason>`.
+- Only a `cancelled` order: anything else returns
+  `{:error, :order_not_reinstatable}` (`refunded` is final). An order in the trash
+  returns `{:error, :order_trashed}` - restore it first.
+- Broadcasts `{:order_reinstated, order}` (then `:order_confirmed` /
+  `:order_paid` when a paid invoice settled it). No durable event is enqueued.
+
 ### Trash
 
 Orders and draft invoices are not deleted from the admin: they go to a trash
@@ -277,11 +301,11 @@ PhoenixKitBilling.list_orders(%{trashed: :only})    # :include for both
   `{:error, :invoice_trashed}` until it is restored, and no email goes out.
 - An invoice cannot be created for, moved onto or restored onto an order in the
   trash (`:order_trashed`). A restore is also refused for a cancelled order
-  (`:order_cancelled`; it stays cancelled, so an invoice trashed from it stays in
-  the trash and its number stays used) and for an order that has another invoice
-  neither void nor in the trash (`:order_has_open_invoices`), so a restore never
-  adds a second open invoice. Creating an invoice for a cancelled order is as it
-  was before the trash.
+  (`:order_cancelled`; an invoice trashed from it stays in the trash until the
+  order is reinstated, and its number stays used) and for an order that has another
+  invoice neither void nor in the trash (`:order_has_open_invoices`), so a restore
+  never adds a second open invoice. Creating an invoice for a cancelled order is as
+  it was before the trash.
 - Trashing and restoring leave `updated_at` as it was.
 - Restoring a trashed draft invoice puts back its old figures. If the order's
   lines changed meanwhile, the invoice no longer matches them: check it before

@@ -5357,3 +5357,40 @@ msgstr "У замовлення є відкритий рахунок. Позна
 #, elixir-autogen, elixir-format
 msgid "Creating..."
 msgstr "Створення..."
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:293
+#, elixir-autogen, elixir-format
+msgid "Failed to reinstate the order: %{reason}"
+msgstr "Не вдалося повернути замовлення: %{reason}"
+
+#: lib/phoenix_kit_billing/errors.ex:237
+#, elixir-autogen, elixir-format
+msgid "Only a cancelled order can be reinstated."
+msgstr "Повернути можна лише скасоване замовлення."
+
+#: lib/phoenix_kit_billing/web/order_detail.ex:284
+#, elixir-autogen, elixir-format
+msgid "Order reinstated"
+msgstr "Замовлення повернуто"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:70
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:436
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:465
+#, elixir-autogen, elixir-format
+msgid "Reinstate order"
+msgstr "Повернути замовлення"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:438
+#, elixir-autogen, elixir-format
+msgid "Reinstate order %{number}?"
+msgstr "Повернути замовлення %{number}?"
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:441
+#, elixir-autogen, elixir-format
+msgid "The order goes back to the status it had before it was cancelled. If one of its invoices was paid meanwhile, it is marked as paid."
+msgstr "Замовлення повернеться до статусу, який мало до скасування. Якщо за цей час було оплачено один з його рахунків, замовлення буде позначено як оплачене."
+
+#: lib/phoenix_kit_billing/web/order_detail.html.heex:456
+#, elixir-autogen, elixir-format
+msgid "Why is this order being reinstated?"
+msgstr "Чому замовлення повертається?"

@@ -191,6 +191,7 @@ defmodule PhoenixKitBilling.Web.Orders do
              :order_paid,
              :order_refunded,
              :order_cancelled,
+             :order_reinstated,
              :order_trashed,
              :order_restored
            ] do
