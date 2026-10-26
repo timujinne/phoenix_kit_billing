@@ -229,6 +229,50 @@ defmodule PhoenixKitBilling.NumberSequencesRaceTest do
     assert second_order.order_number =~ ~r/-0002$/
   end
 
+  # Renumbering an order lifts the order counter. It must not do that while
+  # waiting for the order row: a transaction that holds the row and then creates
+  # an order waits for the counter, and the two would deadlock (40P01).
+  test "renumbering an order does not deadlock with a transaction that holds it", %{user: user} do
+    {:ok, order} = Billing.create_order(user, order_attrs())
+    test_pid = self()
+
+    holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          Repo.one(
+            from(o in Order,
+              where: o.uuid == ^order.uuid,
+              lock: "FOR NO KEY UPDATE",
+              select: o.uuid
+            )
+          )
+
+          send(test_pid, :holding_the_order)
+
+          receive do
+            :go -> Billing.create_order(user, order_attrs())
+          end
+        end)
+      end)
+
+    assert_receive :holding_the_order, 5_000
+
+    renumber =
+      Task.async(fn ->
+        Billing.update_order(order, %{"order_number" => "ORD-#{Date.utc_today().year}-0050"})
+      end)
+
+    # The renumbering is waiting for the order row.
+    :ok = wait_until_a_backend_waits_on_a_lock()
+    send(holder.pid, :go)
+
+    assert {:ok, {:ok, created}} = Task.await(holder, 30_000)
+    assert {:ok, renumbered} = Task.await(renumber, 30_000)
+
+    assert renumbered.order_number =~ ~r/-0050$/
+    assert created.order_number =~ ~r/-0002$/
+  end
+
   defp wait_until_a_backend_waits_on_a_lock(attempts \\ 200) do
     waiting =
       Repo.query!("""

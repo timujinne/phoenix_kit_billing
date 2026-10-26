@@ -287,7 +287,14 @@ defmodule PhoenixKitBilling.Migrations do
   paths from doing it, and a host that wraps several calls in one transaction
   must keep them too.
 
-  Taking locks in this order, everywhere:
+  The rule underneath: **a path takes the row locks it needs before its
+  counters, and does not wait for a row lock while holding a counter** - with one
+  exception, below. `update_order` and `update_invoice` that change a number lock
+  their own row (`FOR UPDATE`; `FOR NO KEY UPDATE` for an `update_order` that
+  keeps its number) before lifting a counter, which is why a transaction that
+  holds that row and then creates a document cannot deadlock with them.
+
+  Between kinds, take the locks in this order, everywhere:
 
     1. An order row taken `FOR UPDATE`: `trash_order/2`, `restore_order/2`,
        `delete_order/1`, and an `update_order/2` that changes the number (the
@@ -307,6 +314,11 @@ defmodule PhoenixKitBilling.Migrations do
        row while holding a counter it needs.)
     6. The transaction counter, then the receipt counter.
     7. The order row `FOR NO KEY UPDATE` (status transitions, `put_order_sync/2`).
+
+  The exception: paying an invoice (`mark_invoice_paid/2`, `record_payment/3`)
+  takes the invoice row, then the transaction and receipt counters, and only then
+  the linked order's row (`FOR NO KEY UPDATE`, step 7). So a host transaction must
+  not hold an order row and then wait for a transaction or receipt counter.
 
   Because the invoice insert takes the order row before the invoice counter, an
   invoice create and a `trash_order/2` or `delete_order/1` of the same order meet

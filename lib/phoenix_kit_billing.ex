@@ -2429,7 +2429,8 @@ defmodule PhoenixKitBilling do
 
   A new `order_number` of this year's shape with the configured prefix
   (`PREFIX-YYYY-NNNN`) lifts the year's counter to at least its NNNN, so the
-  counter never reaches it.
+  counter never reaches it. The update opens a transaction, and locks the order
+  row first (`FOR UPDATE` when it renumbers), before it lifts the counter.
 
   Returns `{:ok, order}`, `{:error, :order_not_editable}`,
   `{:error, :order_trashed}` for an order in the trash (checked on the stored
