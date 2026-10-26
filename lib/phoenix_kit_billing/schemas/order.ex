@@ -77,6 +77,12 @@ defmodule PhoenixKitBilling.Order do
                cancelled   refunded
   ```
 
+  A cancelled order can be reinstated (`PhoenixKitBilling.reinstate_order/3`):
+  it goes back to the status it was cancelled from (`reinstated_status/1`).
+  `refunded` is final. `metadata["reinstated"]` keeps only the latest
+  reinstatement, as `cancelled_from` keeps only the latest cancellation; the
+  earlier ones are in `internal_notes` (when a reason was given) and Activity.
+
   ## Line Item Structure
 
   ```json
@@ -357,6 +363,55 @@ defmodule PhoenixKitBilling.Order do
     end)
   end
 
+  @doc """
+  The status a cancelled order goes back to when it is reinstated: the one it
+  was cancelled from (`metadata["cancelled_from"]`), or `"pending"` for an
+  order cancelled before billing kept that trail.
+  """
+  @spec reinstated_status(t()) :: String.t()
+  def reinstated_status(%__MODULE__{metadata: %{"cancelled_from" => from}})
+      when from in ~w(draft pending confirmed),
+      do: from
+
+  def reinstated_status(%__MODULE__{}), do: "pending"
+
+  @doc """
+  Changeset that takes a cancelled order back to `reinstated_status/1`, clears
+  `cancelled_at` and records the trail in `metadata["reinstated"]`: `"status"`
+  (where it went back to), `"reason"`, `"by_uuid"` (`nil` when nobody is named)
+  and `"at"`. The cancellation's own trail is kept.
+
+  `"reinstated"` is written here and nowhere else, like the cancellation trail.
+  An order that is not cancelled gets an error on `:status`.
+  """
+  def reinstate_changeset(%__MODULE__{} = order, actor_uuid, reason) do
+    to = reinstated_status(order)
+
+    trail = %{
+      "reinstated" => %{
+        "status" => to,
+        "reason" => reason,
+        "by_uuid" => actor_uuid,
+        "at" => DateTime.to_iso8601(UtilsDate.utc_now())
+      }
+    }
+
+    changeset =
+      order
+      |> change(status: to, cancelled_at: nil)
+      |> track_revision()
+      # After `bump_revision/1` (registered by `track_revision/1`), which keeps
+      # the stored trail: this replaces it with the reinstatement's own.
+      |> prepare_changes(fn changeset ->
+        metadata = get_field(changeset, :metadata) || %{}
+        put_change(changeset, :metadata, Map.merge(metadata, trail))
+      end)
+
+    if order.status == "cancelled",
+      do: changeset,
+      else: add_error(changeset, :status, "only a cancelled order can be reinstated")
+  end
+
   defp validate_status_transition(changeset, from, to) do
     valid_transitions = %{
       "draft" => ~w(pending confirmed cancelled),
@@ -424,8 +479,9 @@ defmodule PhoenixKitBilling.Order do
   # Metadata keys billing owns: no changeset can set, replace or drop them.
   @owned_metadata_keys ~w(revision sync)
 
-  # Written only by `cancel_changeset/2`; kept as stored by every other change.
-  @cancel_metadata_keys ~w(cancelled_from cancelled_by_uuid)
+  # Written only by `cancel_changeset/2` and `reinstate_changeset/3`; kept as
+  # stored by every other change.
+  @cancel_metadata_keys ~w(cancelled_from cancelled_by_uuid reinstated)
 
   # What an external system reads of an order. `internal_notes` and the frozen
   # `base_*` figures are not among them.

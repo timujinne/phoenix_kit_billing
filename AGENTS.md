@@ -233,6 +233,22 @@ Invoice status workflow: `draft → sent → paid`, with `sent → overdue → p
 payment leaves the status at `sent`) is not voided: `void_invoice/3` returns
 `{:error, :invoice_has_payments}` and the admin page hides *Void* - refund first.
 
+**Reinstating a cancelled order.** `reinstate_order/3` (`reason`, `actor_uuid:`;
+no actor when the system does it) takes a `cancelled` order back to
+`metadata["cancelled_from"]` (`pending` when an old order has no trail),
+clears `cancelled_at`, moves the revision on and broadcasts `:order_reinstated`.
+The trail is `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`),
+billing's own like `cancelled_from`; a reason is also appended to the stored
+`internal_notes` as `Reinstated <date>: <reason>`. An invoice paid while the order
+was cancelled settles it in the same transaction (confirmed, then paid, with
+`:order_confirmed` / `:order_paid`). Paying and refunding read the linked order's
+status under its row lock (step 7), so they wait for a reinstate in flight
+instead of reading the order as cancelled. The reinstate decides on the locked row:
+anything but
+`cancelled` is `:order_not_reinstatable` (`refunded` is final), an order in the
+trash is `:order_trashed` - restore it first. The admin order page offers
+*Reinstate order* under `manage_orders`.
+
 **The trash.** `Order` and `Invoice` carry `trashed_at` / `trashed_by_uuid` (V8),
 billing's own: `changeset/2` cannot set or clear them, only `trash_order/2`,
 `restore_order/2`, `trash_invoice/2` and `restore_invoice/2` do. Trash is the only
@@ -247,8 +263,8 @@ the dashboard leave the trash out by default (`trashed: :only | :include`
 brings it back), and so do a customer's orders, the invoices preloaded on them
 and `get_order_by_uuid/2`. An invoice cannot be created for, moved onto or
 restored onto an order in the trash or a cancelled one (`:order_trashed`,
-`:order_cancelled`); a cancelled order stays cancelled, so an invoice trashed from
-it stays in the trash (its number stays used). The checks lock the order row against
+`:order_cancelled`); an invoice trashed from a cancelled order stays in the trash
+while the order is cancelled (its number stays used). The checks lock the order row against
 `trash_order/2`. A stored order is edited only while its stored status is `draft`
 or `pending`: `update_order/2` re-checks that, and any status change, on the
 locked row, so a stale struct cannot undo a cancellation. Trashing and restoring do not
@@ -304,8 +320,9 @@ per-user form with a `:user:<user_uuid>` suffix.
 Trashing announces `{:order_trashed, order}` / `{:order_restored, order}` and
 `{:invoice_trashed, invoice}` / `{:invoice_restored, invoice}` on the order and
 invoice topics - and nothing else with them: not `:order_updated`, `:order_cancelled`
-or `:invoice_voided`, and no durable `InvoiceEvents` event. A subscriber with a
-strict `handle_info/2` needs a catch-all clause for these.
+or `:invoice_voided`, and no durable `InvoiceEvents` event. Reinstating announces
+`{:order_reinstated, order}`. A subscriber with a strict `handle_info/2` needs a
+catch-all clause for these.
 
 ### Permissions
 

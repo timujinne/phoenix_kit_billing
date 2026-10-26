@@ -67,6 +67,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
             |> assign(:show_status_modal, false)
             |> assign(:show_invoice_modal, false)
             |> assign(:show_cancel_modal, false)
+            |> assign(:show_reinstate_modal, false)
             |> assign(:show_trash_modal, false)
             |> assign(:show_restore_modal, false)
           end
@@ -83,6 +84,7 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
              :order_paid,
              :order_refunded,
              :order_cancelled,
+             :order_reinstated,
              :order_trashed,
              :order_restored
            ] do
@@ -230,6 +232,53 @@ defmodule PhoenixKitBilling.Web.OrderDetail do
            |> put_flash(
              :error,
              gettext("Failed to cancel order: %{reason}", reason: Errors.message(reason))
+           )}
+      end
+    end)
+  end
+
+  @impl true
+  def handle_event("open_reinstate_modal", _params, socket) do
+    {:noreply, assign(socket, :show_reinstate_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_reinstate_modal", _params, socket) do
+    {:noreply, assign(socket, :show_reinstate_modal, false)}
+  end
+
+  @impl true
+  def handle_event("reinstate_order", params, socket) do
+    Authz.authorize(socket, :manage_orders, fn ->
+      actor_uuid = Activity.actor_uuid(socket)
+
+      case Billing.reinstate_order(socket.assigns.order, params["reason"], actor_uuid: actor_uuid) do
+        {:ok, order} ->
+          Activity.log("billing.order_reinstated",
+            actor_uuid: actor_uuid,
+            actor_role: Activity.actor_role(socket),
+            resource_type: "order",
+            resource_uuid: order.uuid,
+            # The operator's own reason, typed for the audit trail (not customer data).
+            metadata:
+              %{"order_number" => order.order_number, "status" => order.status}
+              |> put_reason(params["reason"])
+          )
+
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_reinstate_modal, false)
+           |> put_flash(:info, gettext("Order reinstated"))}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> refresh_order()
+           |> assign(:show_reinstate_modal, false)
+           |> put_flash(
+             :error,
+             gettext("Failed to reinstate the order: %{reason}", reason: Errors.message(reason))
            )}
       end
     end)

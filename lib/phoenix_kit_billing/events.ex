@@ -7,7 +7,7 @@ defmodule PhoenixKitBilling.Events do
 
   ## Topics
 
-  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, refunded, cancelled, trashed, restored)
+  - `phoenix_kit:billing:orders` - Order events (created, updated, confirmed, paid, refunded, cancelled, reinstated, trashed, restored)
   - `phoenix_kit:billing:invoices` - Invoice events (created, sent, paid, voided, trashed, restored)
   - `phoenix_kit:billing:profiles` - Billing profile events (created, updated, deleted)
   - `phoenix_kit:billing:transactions` - Transaction events (created, refunded)
@@ -163,6 +163,15 @@ defmodule PhoenixKitBilling.Events do
   def broadcast_order_cancelled(order) do
     broadcast(@orders_topic, {:order_cancelled, order})
     broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_cancelled, order})
+  end
+
+  @doc """
+  Broadcasts order reinstated event (a cancelled order went back to the status
+  it was cancelled from).
+  """
+  def broadcast_order_reinstated(order) do
+    broadcast(@orders_topic, {:order_reinstated, order})
+    broadcast("#{@orders_topic}:user:#{order.user_uuid}", {:order_reinstated, order})
   end
 
   @doc """
