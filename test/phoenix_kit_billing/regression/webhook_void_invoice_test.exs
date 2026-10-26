@@ -128,6 +128,45 @@ defmodule PhoenixKitBilling.Regression.WebhookVoidInvoiceTest do
     assert Decimal.equal?(Decimal.new(amount), 100)
   end
 
+  test "the same charge reported again notifies once", %{admin: admin, invoice: invoice} do
+    {:ok, _voided} = Billing.void_invoice(invoice, "Duplicate")
+
+    capture_log(fn ->
+      assert {:ok, :invoice_void} = WebhookProcessor.process(payment_event(invoice, "evt_void_a"))
+    end)
+
+    # Another event for the same charge, as a provider retry or a second
+    # event type for it: the trail already has it, and so have the admins.
+    capture_log(fn ->
+      assert {:ok, :invoice_void} = WebhookProcessor.process(payment_event(invoice, "evt_void_b"))
+    end)
+
+    assert [_] = Billing.get_invoice!(invoice.uuid).metadata["void"]["payments_after_void"]
+    assert [_] = texts(admin)
+  end
+
+  test "a retry of an event not marked processed notifies once", %{admin: admin, invoice: invoice} do
+    {:ok, voided} = Billing.void_invoice(invoice, "Duplicate")
+    event = payment_event(invoice, "evt_void_retry")
+
+    capture_log(fn ->
+      assert {:ok, :invoice_void} = WebhookProcessor.process(event)
+    end)
+
+    # The first attempt died after the trail was written and before the event
+    # was marked processed, so the provider's retry is processed afresh.
+    Repo.get_by!(WebhookEvent, event_id: "evt_void_retry")
+    |> Ecto.Changeset.change(processed: false)
+    |> Repo.update!()
+
+    capture_log(fn ->
+      assert {:ok, :invoice_void} = WebhookProcessor.process(event)
+    end)
+
+    assert [_] = Billing.get_invoice!(voided.uuid).metadata["void"]["payments_after_void"]
+    assert [_] = texts(admin)
+  end
+
   test "the charge keeps the currency the webhook reports", %{invoice: invoice} do
     {:ok, _voided} = Billing.void_invoice(invoice)
 

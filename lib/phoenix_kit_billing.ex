@@ -4626,9 +4626,11 @@ defmodule PhoenixKitBilling do
   `charge` is a map with the keys `:provider`, `:charge_id`, `:amount`,
   `:currency` and `:event_id`. Takes the invoice row lock.
 
-  Returns `{:ok, invoice}`, `{:error, :invoice_not_void}` when the stored
-  invoice is not void, or `{:error, :invoice_not_found}`. Refusals are
-  returned, not rolled back.
+  Returns `{:ok, invoice, :added}` when the charge was appended,
+  `{:ok, invoice, :duplicate}` when the trail had it already (nothing is
+  written; a caller that tells someone about new charges tells them only on
+  `:added`), `{:error, :invoice_not_void}` when the stored invoice is not void,
+  or `{:error, :invoice_not_found}`. Refusals are returned, not rolled back.
   """
   def record_payment_after_void(%Invoice{} = invoice, charge) when is_map(charge) do
     unwrap_transaction(fn ->
@@ -4646,7 +4648,7 @@ defmodule PhoenixKitBilling do
     entries = Map.get(trail, "payments_after_void", [])
 
     if charge_recorded?(entries, charge) do
-      {:ok, locked}
+      {:ok, locked, :duplicate}
     else
       entry = %{
         "provider" => charge[:provider] && to_string(charge[:provider]),
@@ -4662,6 +4664,10 @@ defmodule PhoenixKitBilling do
       locked
       |> Ecto.Changeset.change(metadata: Map.put(metadata, "void", trail))
       |> repo().update()
+      |> case do
+        {:ok, updated} -> {:ok, updated, :added}
+        error -> error
+      end
     end
   end
 

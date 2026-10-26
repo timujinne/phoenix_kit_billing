@@ -264,8 +264,12 @@ defmodule PhoenixKitBilling.WebhookProcessor do
     )
 
     case Billing.record_payment_after_void(invoice, charge) do
-      {:ok, _invoice} ->
+      {:ok, _invoice, :added} ->
         _ = Notifications.payment_failed(invoice, :invoice_void)
+        {:ok, :invoice_void}
+
+      # The trail had the charge already, and so the operators have been told.
+      {:ok, _invoice, :duplicate} ->
         {:ok, :invoice_void}
 
       {:error, reason} ->

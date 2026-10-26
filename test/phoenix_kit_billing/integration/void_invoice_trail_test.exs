@@ -205,7 +205,7 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       invoice = sent_invoice(user)
       {:ok, voided} = Billing.void_invoice(invoice, "Duplicate")
 
-      assert {:ok, updated} = Billing.record_payment_after_void(voided, @charge)
+      assert {:ok, updated, :added} = Billing.record_payment_after_void(voided, @charge)
 
       assert %{"reason" => "Duplicate", "payments_after_void" => [entry]} =
                updated.metadata["void"]
@@ -227,16 +227,16 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
     test "appends to the stored trail and counts an event once", %{user: user} do
       {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
 
-      {:ok, _} = Billing.record_payment_after_void(voided, @charge)
+      {:ok, _, :added} = Billing.record_payment_after_void(voided, @charge)
 
-      {:ok, _} =
+      {:ok, _, :added} =
         Billing.record_payment_after_void(voided, %{
           @charge
           | charge_id: "ch_2",
             event_id: "evt_2"
         })
 
-      {:ok, again} = Billing.record_payment_after_void(voided, @charge)
+      {:ok, again, :duplicate} = Billing.record_payment_after_void(voided, @charge)
 
       assert [%{"charge_id" => "ch_1"}, %{"charge_id" => "ch_2"}] =
                again.metadata["void"]["payments_after_void"]
@@ -245,8 +245,10 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
     test "counts a charge once even when another event reports it", %{user: user} do
       {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
 
-      {:ok, _} = Billing.record_payment_after_void(voided, @charge)
-      {:ok, again} = Billing.record_payment_after_void(voided, %{@charge | event_id: "evt_other"})
+      {:ok, _, :added} = Billing.record_payment_after_void(voided, @charge)
+
+      {:ok, again, :duplicate} =
+        Billing.record_payment_after_void(voided, %{@charge | event_id: "evt_other"})
 
       assert [%{"charge_id" => "ch_1", "event_id" => "evt_1"}] =
                again.metadata["void"]["payments_after_void"]
@@ -256,7 +258,7 @@ defmodule PhoenixKitBilling.Integration.VoidInvoiceTrailTest do
       invoice = sent_invoice(user)
       {:ok, old} = invoice |> Invoice.status_changeset("void") |> Repo.update()
 
-      assert {:ok, updated} = Billing.record_payment_after_void(old, @charge)
+      assert {:ok, updated, :added} = Billing.record_payment_after_void(old, @charge)
       assert [_] = updated.metadata["void"]["payments_after_void"]
       assert Invoice.void_reason(updated) == nil
     end

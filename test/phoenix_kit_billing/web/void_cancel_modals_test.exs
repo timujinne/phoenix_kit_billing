@@ -290,7 +290,7 @@ defmodule PhoenixKitBilling.Web.VoidCancelModalsTest do
 
     test "warns about a payment that arrived after the void", %{conn: conn, user: user} do
       {:ok, voided} = Billing.void_invoice(sent_invoice(user), "Duplicate")
-      {:ok, _} = Billing.record_payment_after_void(voided, charge())
+      {:ok, _, :added} = Billing.record_payment_after_void(voided, charge())
 
       {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{voided.uuid}")
 
