@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **Core pin widened to `>= 2.65.0 and < 4.0.0`:** works with core 3.x (core 3.0 stops creating the module tables; this module's own chain builds its tables). The floor is the first core with the `file_references/0` and `expected_schema/0` callbacks, which now carry `@impl PhoenixKit.Module`.
+
 - The migration chain is now V6. V2 and V3 alter `phoenix_kit_currencies` and
   `phoenix_kit_orders`, which V4 creates, so on a database without core's copy
   of those tables the chain failed at V2 before adopting anything. V6 emits the

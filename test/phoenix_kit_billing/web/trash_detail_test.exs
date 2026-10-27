@@ -191,13 +191,13 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
     } do
       order = order(user)
       conn = denied_conn(conn, ["billing", "billing.manage_invoices"])
-      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-      refute has_element?(view, "#trash-order-button")
+      # The order page itself needs manage_orders, so neither the button nor
+      # the event is reachable.
+      assert {:error, {:live_redirect, %{flash: %{"error" => error}}}} =
+               live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-      render_hook(view, "trash_order", %{})
-
-      assert has_element?(view, "#flash-error", "permission")
+      assert error =~ "permission"
       refute Order.trashed?(Billing.get_order!(order.uuid))
     end
   end
@@ -280,14 +280,12 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
 
     test "restore is not offered without manage_orders", %{conn: conn, order: order} do
       conn = denied_conn(conn, ["billing", "billing.manage_invoices"])
-      {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-      assert has_element?(view, "#order-trashed-badge")
-      refute has_element?(view, "#restore-order-button")
+      # The order page itself needs manage_orders.
+      assert {:error, {:live_redirect, %{flash: %{"error" => error}}}} =
+               live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-      render_hook(view, "restore_order", %{})
-
-      assert has_element?(view, "#flash-error", "permission")
+      assert error =~ "permission"
       assert Order.trashed?(Billing.get_order!(order.uuid))
     end
 
@@ -489,13 +487,12 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
     } do
       invoice = draft_invoice(user)
       conn = denied_conn(conn, ["billing", "billing.manage_orders"])
-      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
 
-      refute has_element?(view, "#trash-invoice-button")
+      # The invoice page itself needs manage_invoices.
+      assert {:error, {:live_redirect, %{flash: %{"error" => error}}}} =
+               live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
 
-      render_hook(view, "trash_invoice", %{})
-
-      assert has_element?(view, "#flash-error", "permission")
+      assert error =~ "permission"
       refute Invoice.trashed?(Billing.get_invoice!(invoice.uuid))
     end
 
@@ -581,14 +578,12 @@ defmodule PhoenixKitBilling.Web.TrashDetailTest do
 
     test "restore is not offered without manage_invoices", %{conn: conn, invoice: invoice} do
       conn = denied_conn(conn, ["billing", "billing.manage_orders"])
-      {:ok, view, _html} = live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
 
-      assert has_element?(view, "#invoice-trashed-badge")
-      refute has_element?(view, "#restore-invoice-button")
+      # The invoice page itself needs manage_invoices.
+      assert {:error, {:live_redirect, %{flash: %{"error" => error}}}} =
+               live(conn, "/en/admin/billing/invoices/#{invoice.uuid}")
 
-      render_hook(view, "restore_invoice", %{})
-
-      assert has_element?(view, "#flash-error", "permission")
+      assert error =~ "permission"
       assert Invoice.trashed?(Billing.get_invoice!(invoice.uuid))
     end
 

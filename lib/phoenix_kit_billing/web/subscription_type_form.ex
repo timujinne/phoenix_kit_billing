@@ -26,7 +26,15 @@ defmodule PhoenixKitBilling.Web.SubscriptionTypeForm do
   alias PhoenixKitBilling.Web.Trail
 
   @impl true
-  def mount(params, _session, socket) do
+  def mount(params, session, socket) do
+    # No tab names this page, so core's route gate admits any "billing"
+    # holder; the page itself checks the capability its records need.
+    Authz.authorize_mount(socket, :manage_subscriptions, fn ->
+      do_mount(params, session, socket)
+    end)
+  end
+
+  defp do_mount(params, _session, socket) do
     if Billing.enabled?() do
       project_title = Settings.get_project_title()
       # §3.3: base = is_default row (billing_default_currency is no longer read)

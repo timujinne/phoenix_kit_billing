@@ -334,8 +334,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
   end
 
   describe "the chain can never destroy the table" do
-    alias PhoenixKit.Migrations.ExpectedSchema
-
     # Compared against the WHOLE expected content, not scanned for a
     # forbidden substring — a substring check only sees statements the
     # builder produced, so anything appended past it (a literal
@@ -545,86 +543,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
       end
     end
 
-    # V4's expected set is CORE'S MANIFEST for the ten newly-adopted
-    # tables, not a hand-typed list — a hand-typed list is maintained by
-    # the same hand that adds a statement, so it catches a slip but never a
-    # deliberate one; the manifest is written on core's side, so this fails
-    # both when the chain emits an object core does not declare AND when
-    # core declares an object the chain stopped adopting. It is also the
-    # only formulation that survives a named schema, where core mangles
-    # three of these index names per-schema and a fixed list cannot.
-    @v4_adopted_tables ~w(
-      phoenix_kit_billing_profiles
-      phoenix_kit_currencies
-      phoenix_kit_invoices
-      phoenix_kit_orders
-      phoenix_kit_transactions
-      phoenix_kit_payment_methods
-      phoenix_kit_subscriptions
-      phoenix_kit_webhook_events
-      phoenix_kit_payment_options
-      phoenix_kit_subscription_types
-    )
-
-    test "up_statements/2 at target 4 emits exactly the index/constraint operations core's manifest declares for the ten adopted tables" do
-      for prefix <- ["public", "billing_alt"] do
-        not_v4 =
-          ~r/phoenix_kit_payment_provider_configs|phoenix_kit_currencies_default_uidx|rounding_rule|rate_updated_at|base_currency|base_total|ADD COLUMN IF NOT EXISTS exchange_rate/
-
-        actual =
-          Migrations.up_statements(prefix, 4)
-          |> Enum.reject(&(String.starts_with?(String.trim(&1), "UPDATE ") or &1 =~ not_v4))
-          |> Enum.map(&operation/1)
-
-        expected = v4_expected_operations(prefix)
-
-        assert Enum.sort(actual) == Enum.sort(expected),
-               """
-               up_statements(#{inspect(prefix)}, 4) does not emit the operation set
-               core's ExpectedSchema declares for V4's ten adopted tables.
-
-               unexpected: #{inspect(Enum.sort(actual) -- Enum.sort(expected))}
-               missing:    #{inspect(Enum.sort(expected) -- Enum.sort(actual))}
-               """
-      end
-    end
-
-    defp v4_expected_operations(prefix) do
-      objects =
-        ExpectedSchema.objects(prefix)
-        |> Enum.filter(fn object ->
-          case object.check do
-            {_kind, %{table: table}} ->
-              # `:legacy_optional` marks an object a later core version
-              # renamed or retired. Core does not expect it to exist any
-              # more, so adopting it would recreate it on every install.
-              table in @v4_adopted_tables and object.class in [:index, :constraint] and
-                Map.get(object, :presence) == :required
-
-            _ ->
-              false
-          end
-        end)
-        |> Enum.map(fn object ->
-          name = object.check |> elem(1) |> Map.fetch!(:name)
-
-          case object.class do
-            :constraint -> {"DO", name}
-            :index -> {index_verb(object.create), name}
-          end
-        end)
-
-      tables = Enum.map(@v4_adopted_tables, &{"CREATE TABLE", &1})
-
-      tables ++ objects
-    end
-
-    defp index_verb(create) do
-      if String.starts_with?(create, "CREATE UNIQUE INDEX"),
-        do: "CREATE UNIQUE INDEX",
-        else: "CREATE INDEX"
-    end
-
     # `ON DELETE SET NULL` / `ON DELETE RESTRICT` are part of a foreign
     # key's DEFINITION — the word DELETE there describes what Postgres does
     # to a child row when a PARENT is deleted, and V4 adopting core's FKs
@@ -782,83 +700,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
   end
 
   describe "V1 stays aligned with core's manifest (while core audits the table)" do
-    alias PhoenixKit.Migrations.ExpectedSchema
-
-    # Core's V135 baseline still creates this table and core's
-    # ExpectedSchema audits that shape, so until the first shape-changing
-    # chain version the two DDLs must agree. This test is optional
-    # documentation more than a guard against drift this package could
-    # introduce (V1 has no second copy of the shape to drift from), but it
-    # doubles as proof that V1 changes nothing.
-    #
-    # The comparison is PER FIELD and asserts both key sets match in full
-    # (not just present keys) — a parse that silently dropped some of
-    # core's columns, or a V1 column core does not declare, must fail
-    # here rather than be skipped.
-    test "every column core declares matches V1's, in full" do
-      core = core_columns_for("phoenix_kit_payment_provider_configs")
-      ours = v1_columns()
-
-      assert Map.keys(ours) -- Map.keys(core) == [],
-             "V1 creates columns core's manifest does not declare: " <>
-               inspect(Map.keys(ours) -- Map.keys(core))
-
-      assert Map.keys(core) -- Map.keys(ours) == [],
-             "V1 does not create columns core's manifest declares: " <>
-               inspect(Map.keys(core) -- Map.keys(ours))
-
-      for {column, expected} <- core do
-        assert Map.fetch!(ours, column) == expected,
-               """
-               #{column}: V1 and core's manifest disagree on the column's shape.
-
-               V1:              #{inspect(Map.fetch!(ours, column))}
-               core's manifest: #{inspect(expected)}
-
-               V1 is an adoption and must be shape-identical to core's
-               baseline. A deliberate change is a chain version (V2+).
-               """
-      end
-    end
-
-    # `%{type, default, not_null}` per column, from the newest revision.
-    defp core_columns_for(table) do
-      prefix = "column:#{table}."
-
-      ExpectedSchema.objects("public")
-      |> Enum.filter(&(&1.class == :column and String.starts_with?(&1.id, prefix)))
-      |> Map.new(fn object ->
-        {_version, shape} = List.last(object.revisions)
-
-        {String.replace_prefix(object.id, prefix, ""),
-         %{type: shape.type, default: shape.default, not_null: shape.not_null}}
-      end)
-    end
-
-    # The same shape, parsed back out of the CREATE TABLE V1 emits.
-    defp v1_columns do
-      [create | _] = Migrations.up_statements("public", 1)
-      parse_create_columns(create)
-    end
-
-    defp parse_create_columns(create) do
-      ~r/^\s*"(\w+)"\s+(.+?),?$/m
-      |> Regex.scan(create)
-      |> Map.new(fn [_line, name, definition] -> {name, parse_column(definition)} end)
-    end
-
-    defp parse_column(definition) do
-      {definition, not_null} =
-        case String.replace_suffix(definition, " NOT NULL", "") do
-          ^definition -> {definition, false}
-          trimmed -> {trimmed, true}
-        end
-
-      case String.split(definition, " DEFAULT ", parts: 2) do
-        [type] -> %{type: type, default: nil, not_null: not_null}
-        [type, default] -> %{type: type, default: default, not_null: not_null}
-      end
-    end
   end
 
   describe "V2 — currencies: default uniqueness + rounding/rate columns" do
@@ -1036,8 +877,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
   end
 
   describe "V4 — adoption of the remaining ten core-baseline tables" do
-    alias PhoenixKit.Migrations.ExpectedSchema
-
     @v4_tables ~w(
       phoenix_kit_billing_profiles
       phoenix_kit_currencies
@@ -1050,17 +889,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
       phoenix_kit_payment_options
       phoenix_kit_subscription_types
     )
-
-    # Columns this chain's OWN later versions already own (V2 on
-    # currencies, V3 on orders) — see the moduledoc's V4 section. V4's
-    # CREATE TABLE deliberately omits them, so core's manifest (which, as
-    # of core's own V185, ALSO independently declares
-    # base_currency/exchange_rate/base_total on orders — see the
-    # moduledoc) is expected to disagree on exactly this set, and nothing
-    # else.
-    @v4_known_column_gaps %{
-      "phoenix_kit_orders" => ~w(base_currency base_total exchange_rate)
-    }
 
     test "up_statements/2 at target 4 creates all ten tables" do
       stmts = Migrations.up_statements("public", 4)
@@ -1099,53 +927,6 @@ defmodule PhoenixKitBilling.MigrationsTest do
 
       assert marker4 ==
                "COMMENT ON TABLE public.phoenix_kit_payment_provider_configs IS 'pkb_schema:4'"
-    end
-
-    # Same guard as V1's "every column core declares matches V1's, in
-    # full" test, extended to the other nine tables — this is the check
-    # that would have caught the historical mistake this content was
-    # originally written with: transcribing a CREATE TABLE from core's
-    # V135 baseline alone misses later core columns (V162 added
-    # `payment_option_uuid` to orders). `phoenix_kit_orders` is the one
-    # exception, and only for the three columns V3 (and, independently,
-    # core's own V185) already own — see `@v4_known_column_gaps` above.
-    test "every column core declares for each adopted table is in V4's CREATE TABLE (except columns this chain's own later versions own)" do
-      creates = v4_creates()
-
-      for table <- @v4_tables do
-        core = core_columns_for(table)
-        ours = Map.fetch!(creates, table)
-        known_gap = Map.get(@v4_known_column_gaps, table, [])
-
-        missing = Map.keys(core) -- Map.keys(ours)
-
-        assert Enum.sort(missing) == Enum.sort(known_gap),
-               "#{table}: V4 does not create columns core declares (beyond the known gap): " <>
-                 inspect(Enum.sort(missing) -- Enum.sort(known_gap))
-
-        assert Map.keys(ours) -- Map.keys(core) == [],
-               "#{table}: V4 creates columns core does not declare: " <>
-                 inspect(Map.keys(ours) -- Map.keys(core))
-
-        for {column, expected} <- core, column not in known_gap do
-          assert Map.fetch!(ours, column) == expected,
-                 """
-                 #{table}.#{column}: V4 and core's manifest disagree.
-
-                 V4:              #{inspect(Map.fetch!(ours, column))}
-                 core's manifest: #{inspect(expected)}
-                 """
-        end
-      end
-    end
-
-    defp v4_creates do
-      Migrations.up_statements("public", 4)
-      |> Enum.filter(&String.starts_with?(&1, "CREATE TABLE"))
-      |> Map.new(fn create ->
-        [_, table] = Regex.run(~r/CREATE TABLE IF NOT EXISTS public\.(\w+)/, create)
-        {table, parse_create_columns(create)}
-      end)
     end
   end
 end

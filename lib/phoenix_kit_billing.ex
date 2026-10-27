@@ -236,7 +236,7 @@ defmodule PhoenixKitBilling do
   The manifest of this module's tables, for `mix phoenix_kit.repair` and
   `mix phoenix_kit.doctor`; see `PhoenixKitBilling.ExpectedSchema`.
   """
-  # No `@impl`, so this compiles against a core that lacks the callback.
+  @impl PhoenixKit.Module
   def expected_schema, do: PhoenixKitBilling.ExpectedSchema
 
   # Without this the host's `:phoenix_kit_css_sources` compiler emits no
@@ -3492,9 +3492,9 @@ defmodule PhoenixKitBilling do
       |> Keyword.put_new(:payment_terms, get_payment_terms())
 
     source =
-      if Keyword.has_key?(opts, :invoice_number),
-        do: {:supplied, opts[:invoice_number]},
-        else: :generate
+      if blank_number?(opts[:invoice_number]),
+        do: :generate,
+        else: {:supplied, opts[:invoice_number]}
 
     build = fn number ->
       opts = if source == :generate, do: Keyword.put(opts, :invoice_number, number), else: opts
@@ -3514,7 +3514,10 @@ defmodule PhoenixKitBilling do
   defp insert_invoice(build, config, source, order_uuid) do
     guard = fn -> ensure_order_takes_invoice(order_uuid) end
 
-    case insert_numbered(build, "invoice", config.invoice_prefix, :invoice_number, source, guard) do
+    case insert_numbered(build, "invoice", config.invoice_prefix, :invoice_number, source,
+           guard: guard,
+           other_numbers: [receipt_number: "receipt"]
+         ) do
       {:ok, created_invoice} ->
         Events.broadcast_invoice_created(created_invoice)
         {:ok, created_invoice}
@@ -5084,7 +5087,14 @@ defmodule PhoenixKitBilling do
   # the row inserted.
   #
   # `field` is the column of the number, which has a unique index.
-  defp insert_numbered(build, scope, prefix, field, source, guard \\ fn -> :ok end) do
+  #
+  # Options: `:guard`, a function run first inside the transaction that returns
+  # `:ok` or `{:error, reason}` (a refusal is returned as a value, nothing
+  # written); `:other_numbers`, `field -> scope` pairs of other numbers the
+  # record carries, whose counters are lifted past them after the insert.
+  defp insert_numbered(build, scope, prefix, field, source, opts \\ []) do
+    guard = Keyword.get(opts, :guard, fn -> :ok end)
+    other_numbers = Keyword.get(opts, :other_numbers, [])
     year = current_year()
 
     case build.(nil) do
@@ -5097,7 +5107,7 @@ defmodule PhoenixKitBilling do
             # `guard` runs before anything is written or numbered, so a refusal
             # is a value and leaves a caller's transaction usable.
             case guard.() do
-              :ok -> insert_with_source(build, scope, prefix, field, year, source)
+              :ok -> insert_with_source(build, scope, prefix, field, year, source, other_numbers)
               {:error, reason} -> {:refused, reason}
             end
           end)
@@ -5112,7 +5122,7 @@ defmodule PhoenixKitBilling do
   end
 
   # Inside `insert_numbered/6`'s transaction.
-  defp insert_with_source(build, scope, prefix, field, year, source) do
+  defp insert_with_source(build, scope, prefix, field, year, source, other_numbers) do
     inserted =
       case source do
         :generate ->
@@ -5124,11 +5134,28 @@ defmodule PhoenixKitBilling do
       end
 
     case inserted do
-      {:ok, record} -> {:inserted, record}
+      {:ok, record} ->
+        raise_record_sequence_floors(record, other_numbers, year)
+        {:inserted, record}
+
       # A run of taken numbers: nothing is wrong with what is inserted,
       # so the counter keeps the progress it made past them.
-      {:exhausted, changeset} -> {:exhausted, changeset}
-      {:error, changeset} -> repo().rollback(changeset)
+      {:exhausted, changeset} ->
+        {:exhausted, changeset}
+
+      {:error, changeset} ->
+        repo().rollback(changeset)
+    end
+  end
+
+  # Imported invoices may already carry a receipt number. Lift its counter in
+  # the same transaction, after the invoice one, so a later payment cannot
+  # issue that receipt number again.
+  defp raise_record_sequence_floors(record, numbers, year) do
+    for {field, scope} <- numbers,
+        number = Map.fetch!(record, field),
+        is_binary(number) do
+      raise_sequence_floor(scope, number_prefix(scope), year, number)
     end
   end
 

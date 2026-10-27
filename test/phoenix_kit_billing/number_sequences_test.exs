@@ -314,6 +314,13 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
       assert new_invoice(order).invoice_number == number("INV", 2)
     end
 
+    test "nil and blank invoice number options get generated numbers", %{order: order} do
+      for {blank, sequence} <- Enum.with_index([nil, "", "  "], 1) do
+        assert {:ok, invoice} = Billing.create_invoice_from_order(order, invoice_number: blank)
+        assert invoice.invoice_number == number("INV", sequence)
+      end
+    end
+
     test "a supplied number that collides is an error, not a raise", %{order: order} do
       {:ok, _} = Billing.create_invoice_from_order(order, invoice_number: "OWN-1")
 
@@ -359,6 +366,26 @@ defmodule PhoenixKitBilling.NumberSequencesTest do
   end
 
   describe "standalone invoices" do
+    test "imported receipt numbers lift an existing receipt counter", %{user: user} do
+      order = new_order(user)
+      {:ok, _} = order |> new_invoice() |> sent() |> Billing.mark_invoice_paid()
+      assert last_value("receipt") == 1
+
+      for {invoice_number, receipt_number} <- [{nil, 2}, {"IMPORTED", 5}] do
+        assert {:ok, imported} =
+                 standalone(user, %{
+                   invoice_number: invoice_number,
+                   receipt_number: number("RCP", receipt_number)
+                 })
+
+        assert imported.receipt_number == number("RCP", receipt_number)
+        assert last_value("receipt") == receipt_number
+
+        assert {:ok, paid} = order |> new_invoice() |> sent() |> Billing.mark_invoice_paid()
+        assert paid.receipt_number == number("RCP", receipt_number + 1)
+      end
+    end
+
     defp standalone(user, extra \\ %{}) do
       Billing.create_invoice(
         user,

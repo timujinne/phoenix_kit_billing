@@ -127,7 +127,10 @@ alone.
   audit row delivers a duplicate on top of the explicit fan-out.
 - **Sub-permissions are re-checked in the UI.** Core's route gate admits anyone
   holding base `"billing"`. Every mutating event handler re-checks the specific
-  capability through `Web.Authz`, and pages showing customer data check on mount;
+  capability through `Web.Authz`. Every detail, form and print page has no tab
+  (so core admits any `"billing"` holder) and calls `Authz.authorize_mount/3` with
+  the sub-key of its list tab — a new such page must too. The base Dashboard
+  shows a section only to the holder of the sub-key that gates those records.
   `Authz.can?/2` fails closed on an absent or malformed scope. Background jobs are
   authorized at enqueue time by the LiveView that starts them; the workers
   themselves run without a scope by design.
@@ -327,9 +330,12 @@ catch-all clause for these.
 
 ### Permissions
 
-Base key `"billing"` is admin-area read access. Sub-permissions (core enforces
+Base key `"billing"` reaches the billing Dashboard (sections filtered by
+sub-key) and nothing else. Sub-permissions (core enforces
 sub-implies-base): `manage_orders`, `manage_invoices`, `manage_subscriptions`,
-`manage_settings`. The split follows what an operator would actually delegate —
+`manage_settings`; each gates both reading and changing its records (orders,
+transactions and billing profiles; invoices and their documents; subscriptions
+and types; currencies, providers and settings). The split follows what an operator would actually delegate —
 chasing invoices is not rotating provider API keys, and neither is refunding an
 order.
 

@@ -355,9 +355,15 @@ defmodule PhoenixKitBilling.Migrations do
   waiting for the invoice counter) the two wait on each other. Do the trash or
   delete first, or in its own transaction.
 
+  A typo in a number typed by hand in the series' own shape (`ORD-2026-9000`
+  for `ORD-2026-0090`) lifts the counter for good: the counter never goes back
+  down, so the numbers in between are skipped for the rest of the year.
+
   The subscription renewal worker creates its invoice inside the transaction that
   also charges the payment method, so it holds the invoice counter across the
-  provider call: other invoice creates wait for the charge to finish.
+  provider call: other invoice creates wait for the charge to finish. Known and
+  left for a follow-up: create the invoice in a short transaction of its own
+  before the charge.
   """
 
   use Ecto.Migration

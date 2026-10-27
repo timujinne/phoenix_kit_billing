@@ -118,13 +118,13 @@ defmodule PhoenixKitBilling.Web.ReinstateOrderTest do
   } do
     order = cancelled_order(user)
     conn = denied_conn(conn, ["billing", "billing.manage_invoices"])
-    {:ok, view, _html} = live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-    refute has_element?(view, "#reinstate-order-button")
+    # The order page itself needs manage_orders, so neither the button nor the
+    # event is reachable.
+    assert {:error, {:live_redirect, %{flash: %{"error" => error}}}} =
+             live(conn, "/en/admin/billing/orders/#{order.uuid}")
 
-    render_hook(view, "reinstate_order", %{"reason" => "x"})
-
-    assert has_element?(view, "#flash-error", "permission")
+    assert error =~ "permission"
     assert Billing.get_order!(order.uuid).status == "cancelled"
   end
 

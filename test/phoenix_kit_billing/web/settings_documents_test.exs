@@ -69,7 +69,7 @@ defmodule PhoenixKitBilling.Web.SettingsDocumentsTest do
       conn: conn
     } do
       Settings.update_setting(DocumentBranding.footer_key(), "Old footer")
-      long = String.duplicate("Домович ", 140)
+      long = String.duplicate("Footer ", 160)
       uuid = UUIDv7.generate()
       {:ok, view, _html} = live(conn, @path)
 
