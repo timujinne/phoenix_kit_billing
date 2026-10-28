@@ -1,7 +1,7 @@
 defmodule PhoenixKitBilling.MixProject do
   use Mix.Project
 
-  @version "0.23.0"
+  @version "0.24.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_billing"
 
   def project do
