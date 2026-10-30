@@ -73,7 +73,8 @@ defmodule PhoenixKitBilling.Providers.Razorpay do
     # Merge invoice data with opts
     merged_opts = Keyword.merge(opts, invoice_to_opts(invoice))
 
-    with {:ok, order} <- create_order(merged_opts),
+    with :ok <- ensure_positive_amount(merged_opts[:amount]),
+         {:ok, order} <- create_order(merged_opts),
          {:ok, payment_link} <- create_payment_link(order, merged_opts) do
       {:ok,
        %CheckoutSession{
@@ -465,7 +466,10 @@ defmodule PhoenixKitBilling.Providers.Razorpay do
       {"Content-Type", "application/json"}
     ]
 
-    opts = build_request_opts(method, headers, body)
+    # Same test transport seam as Stripe and PayPal; unset in production.
+    opts =
+      build_request_opts(method, headers, body)
+      |> Keyword.merge(Application.get_env(:phoenix_kit_billing, :razorpay_req_options, []))
 
     method
     |> do_http_request(url, opts)
@@ -508,8 +512,12 @@ defmodule PhoenixKitBilling.Providers.Razorpay do
 
   defp datetime_from_unix(_), do: nil
 
+  defp invoice_to_opts(%_{} = invoice), do: invoice |> Map.from_struct() |> invoice_to_opts()
+
   defp invoice_to_opts(invoice) when is_map(invoice) do
-    amount = invoice[:total] || invoice["total"] || Decimal.new(0)
+    total = invoice[:total] || invoice["total"] || Decimal.new(0)
+    paid = invoice[:paid_amount] || invoice["paid_amount"] || Decimal.new(0)
+    amount = Decimal.sub(total, paid)
 
     # Was: an unconditional Decimal.mult(amount, 100) here, so create_order/1
     # received an already-scaled integer and its own is_integer(amount)
@@ -533,4 +541,8 @@ defmodule PhoenixKitBilling.Providers.Razorpay do
   end
 
   defp invoice_to_opts(_), do: []
+
+  defp ensure_positive_amount(amount) do
+    if Decimal.positive?(amount), do: :ok, else: {:error, :nothing_to_pay}
+  end
 end

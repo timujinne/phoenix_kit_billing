@@ -70,6 +70,8 @@ defmodule PhoenixKitBilling.Invoice do
   alias PhoenixKitBilling.Order
   alias PhoenixKitBilling.Transaction
 
+  @type t :: %__MODULE__{}
+
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @valid_statuses ~w(draft sent paid void overdue)
 

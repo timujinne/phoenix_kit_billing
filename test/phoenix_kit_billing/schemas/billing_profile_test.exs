@@ -198,6 +198,42 @@ defmodule PhoenixKitBilling.Schemas.BillingProfileTest do
       assert %{email: ["can't be blank"]} = errors_on(cs)
     end
 
+    test "the phone is optional by default" do
+      assert BillingProfile.fields_changeset(%BillingProfile{}, @individual_fields).valid?
+    end
+
+    test "require_phone: true requires the phone, for both types" do
+      for fields <- [@individual_fields, @company_fields] do
+        cs = BillingProfile.fields_changeset(%BillingProfile{}, fields, require_phone: true)
+        assert %{phone: ["can't be blank"]} = errors_on(cs)
+
+        blank = Map.put(fields, "phone", "   ")
+
+        assert %{phone: ["can't be blank"]} =
+                 errors_on(
+                   BillingProfile.fields_changeset(%BillingProfile{}, blank, require_phone: true)
+                 )
+
+        assert BillingProfile.fields_changeset(
+                 %BillingProfile{},
+                 Map.put(fields, "phone", "+372 5555 5555"),
+                 require_phone: true
+               ).valid?
+      end
+    end
+
+    test "require_phone is independent of require_email and require_address" do
+      cs =
+        BillingProfile.fields_changeset(
+          %BillingProfile{},
+          Map.put(@individual_fields, "phone", "+372 5555 5555"),
+          require_phone: true
+        )
+
+      assert cs.valid?
+      refute Map.has_key?(errors_on(cs), :email)
+    end
+
     test "the address is optional by default" do
       assert BillingProfile.fields_changeset(%BillingProfile{}, @individual_fields).valid?
     end

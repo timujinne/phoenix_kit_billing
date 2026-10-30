@@ -70,6 +70,7 @@ defmodule PhoenixKitBilling.Providers.PayPal do
     merged_opts = Keyword.merge(opts, invoice_to_opts(invoice))
 
     with {:ok, amount_str} <- format_amount(merged_opts[:amount], merged_opts[:currency]),
+         :ok <- ensure_positive_amount(merged_opts[:amount]),
          {:ok, token} <- get_access_token(),
          {:ok, order} <- create_order(token, amount_str, merged_opts) do
       # Find the approval URL
@@ -520,6 +521,7 @@ defmodule PhoenixKitBilling.Providers.PayPal do
         :get -> [headers: headers]
         _ -> [headers: headers, json: body]
       end
+      |> Keyword.merge(Application.get_env(:phoenix_kit_billing, :paypal_req_options, []))
 
     result =
       case method do
@@ -665,8 +667,12 @@ defmodule PhoenixKitBilling.Providers.PayPal do
     end
   end
 
+  defp invoice_to_opts(%_{} = invoice), do: invoice |> Map.from_struct() |> invoice_to_opts()
+
   defp invoice_to_opts(invoice) when is_map(invoice) do
-    amount = invoice[:total] || invoice["total"] || Decimal.new(0)
+    total = invoice[:total] || invoice["total"] || Decimal.new(0)
+    paid = invoice[:paid_amount] || invoice["paid_amount"] || Decimal.new(0)
+    amount = Decimal.sub(total, paid)
 
     [
       amount: amount,
@@ -682,4 +688,8 @@ defmodule PhoenixKitBilling.Providers.PayPal do
   end
 
   defp invoice_to_opts(_), do: []
+
+  defp ensure_positive_amount(amount) do
+    if Decimal.positive?(amount), do: :ok, else: {:error, :nothing_to_pay}
+  end
 end

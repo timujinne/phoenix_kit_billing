@@ -231,6 +231,18 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFieldsTest do
       end
     end
 
+    test "phone is required only with require_phone, for both types" do
+      for type <- ~w(individual company) do
+        optional = render_fields(type: type)
+        refute required?(optional, "billing-profile-phone")
+        refute star?(optional, "billing-profile-phone")
+
+        marked = render_fields(type: type, require_phone: true)
+        assert required?(marked, "billing-profile-phone")
+        assert star?(marked, "billing-profile-phone")
+      end
+    end
+
     test "street, city, postal code and country are required only with require_address" do
       optional = render_fields()
 

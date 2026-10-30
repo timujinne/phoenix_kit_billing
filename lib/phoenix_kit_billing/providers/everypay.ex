@@ -76,7 +76,7 @@ defmodule PhoenixKitBilling.Providers.EveryPay do
   @doc """
   Creates an EveryPay one-off payment and returns the hosted payment page URL.
 
-  The invoice total (`invoice.total`) is charged in the currency fixed by the
+  The invoice's remaining balance is charged in the currency fixed by the
   configured processing account.
 
   ## Options
@@ -96,8 +96,11 @@ defmodule PhoenixKitBilling.Providers.EveryPay do
   """
   @impl true
   def create_checkout_session(invoice, opts) do
+    due = Decimal.sub(invoice.total, Map.get(invoice, :paid_amount) || Decimal.new(0))
+
     with {:ok, config} <- ensure_configured(),
-         {:ok, amount} <- decimal_to_amount(invoice.total, invoice.currency) do
+         :ok <- ensure_positive_amount(due),
+         {:ok, amount} <- decimal_to_amount(due, invoice.currency) do
       params =
         %{
           api_username: config[:api_username],
@@ -373,6 +376,8 @@ defmodule PhoenixKitBilling.Providers.EveryPay do
         retry: false
       ]
       |> maybe_put_json(body)
+      # Same test transport seam as Stripe and PayPal; unset in production.
+      |> Keyword.merge(Application.get_env(:phoenix_kit_billing, :everypay_req_options, []))
 
     case Req.request(options) do
       {:ok, %{status: status, body: response_body}} when status in 200..299 ->
@@ -388,6 +393,10 @@ defmodule PhoenixKitBilling.Providers.EveryPay do
 
   defp maybe_put_json(options, nil), do: options
   defp maybe_put_json(options, body), do: Keyword.put(options, :json, body)
+
+  defp ensure_positive_amount(amount) do
+    if Decimal.positive?(amount), do: :ok, else: {:error, :nothing_to_pay}
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map

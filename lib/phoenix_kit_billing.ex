@@ -5802,6 +5802,13 @@ defmodule PhoenixKitBilling do
   - `attrs` - Transaction attributes including :amount (positive value), :description (reason)
   - `admin_user` - The admin user recording the refund
 
+  `attrs[:payment_method]` defaults to `"bank"`. A refund made at a payment
+  provider (`Providers.create_refund/4`) must be recorded with that provider's
+  method (`"stripe"`, ...) and its refund id as `:provider_transaction_id`;
+  the provider's refund webhook reconciles against refunds of the payment's
+  own method, so one recorded as `"bank"` is recorded again when the webhook
+  arrives.
+
   ## Examples
 
       {:ok, transaction} = Billing.record_refund(invoice, %{amount: "50.00", description: "Partial refund"}, admin)
@@ -5835,9 +5842,31 @@ defmodule PhoenixKitBilling do
     end
   end
 
-  defp do_record_transaction(invoice, amount, attrs, admin_user) do
-    transaction_attrs = build_transaction_attrs(invoice, amount, attrs, admin_user)
+  # Internal webhook entry point. Read the refund ledger under the same
+  # invoice lock as the insert, so concurrent deliveries cannot both claim
+  # the same unrecorded part of a cumulative refund.
+  @doc false
+  def record_provider_refund(%Invoice{} = invoice, attrs, amount_fun)
+      when is_function(amount_fun, 1) do
+    do_record_transaction(
+      invoice,
+      fn locked ->
+        case amount_fun.(locked) do
+          {:ok, amount} ->
+            if Decimal.positive?(amount),
+              do: Decimal.negate(amount),
+              else: repo().rollback(:invalid_amount)
 
+          {:error, reason} ->
+            repo().rollback(reason)
+        end
+      end,
+      attrs,
+      nil
+    )
+  end
+
+  defp do_record_transaction(invoice, amount_or_fun, attrs, admin_user) do
     result =
       repo().transaction(fn ->
         # Re-check the balance on the LOCKED invoice. The caller's check runs
@@ -5849,6 +5878,8 @@ defmodule PhoenixKitBilling do
         # second of two refunds that each fit only died later, when the
         # recalculated paid_amount went negative and `update!` raised.
         locked = lock_invoice_for_update(invoice)
+        amount = transaction_amount(amount_or_fun, locked)
+        transaction_attrs = build_transaction_attrs(locked, amount, attrs, admin_user)
 
         with {:error, reason} <- check_transaction_fits(locked, amount) do
           repo().rollback(reason)
@@ -5872,6 +5903,11 @@ defmodule PhoenixKitBilling do
         error
     end
   end
+
+  defp transaction_amount(amount_fun, locked) when is_function(amount_fun, 1),
+    do: amount_fun.(locked)
+
+  defp transaction_amount(amount, _locked), do: amount
 
   # Inside the transaction, with the invoice locked: the ledger row, then the
   # invoice brought in line with it. Returns what the transaction returns.
@@ -6698,6 +6734,26 @@ defmodule PhoenixKitBilling do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @doc """
+  Starts the online payment of an order and returns where to send the buyer.
+
+  Finds or creates the order's open invoice, makes it payable without sending
+  an email, and opens a checkout session at the provider of the order's
+  payment option. Calling it again for the same order returns the same invoice
+  and, while it is still live, the same session URL. Options and error reasons
+  are on `PhoenixKitBilling.OrderPayment`.
+
+  ## Examples
+
+      {:ok, %{invoice: invoice, url: url}} =
+        Billing.start_order_payment(order, success_url: "https://shop.example/orders/1")
+  """
+  @spec start_order_payment(Order.t() | String.t(), keyword()) ::
+          {:ok, %{invoice: Invoice.t(), url: String.t()}} | {:error, term()}
+  defdelegate start_order_payment(order_or_uuid, opts),
+    to: PhoenixKitBilling.OrderPayment,
+    as: :start
 
   @doc """
   Creates a setup session for saving a payment method.

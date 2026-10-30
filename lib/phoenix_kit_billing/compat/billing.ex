@@ -163,6 +163,7 @@ defmodule PhoenixKit.Modules.Billing do
 
   # Checkout
   defdelegate create_checkout_session(invoice, provider, opts \\ []), to: PhoenixKitBilling
+  defdelegate start_order_payment(order_or_uuid, opts), to: PhoenixKitBilling
   defdelegate create_setup_session(user_uuid, provider, opts \\ []), to: PhoenixKitBilling
 
   # Utilities

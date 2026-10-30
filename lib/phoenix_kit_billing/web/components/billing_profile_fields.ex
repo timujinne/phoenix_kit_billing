@@ -89,6 +89,8 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
 
   attr(:require_email, :boolean, default: false, doc: "mark the email field as required")
 
+  attr(:require_phone, :boolean, default: false, doc: "mark the phone field as required")
+
   attr(:require_address, :boolean,
     default: false,
     doc: "mark the street, city, postal code and country fields as required"
@@ -106,6 +108,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
         form={@form}
         id_prefix={@id_prefix}
         require_email={@require_email}
+        require_phone={@require_phone}
       />
 
       <.company_card
@@ -113,6 +116,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
         form={@form}
         id_prefix={@id_prefix}
         require_email={@require_email}
+        require_phone={@require_phone}
       />
 
       <.address_card
@@ -197,6 +201,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
   attr(:form, Phoenix.HTML.Form, required: true)
   attr(:id_prefix, :string, required: true)
   attr(:require_email, :boolean, required: true)
+  attr(:require_phone, :boolean, required: true)
 
   defp individual_card(assigns) do
     ~H"""
@@ -254,6 +259,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
             type="tel"
             label={gettext("Phone")}
             placeholder="+372 5555 5555"
+            required={@require_phone}
           />
         </div>
       </div>
@@ -264,6 +270,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
   attr(:form, Phoenix.HTML.Form, required: true)
   attr(:id_prefix, :string, required: true)
   attr(:require_email, :boolean, required: true)
+  attr(:require_phone, :boolean, required: true)
 
   defp company_card(assigns) do
     ~H"""
@@ -333,6 +340,7 @@ defmodule PhoenixKitBilling.Web.Components.BillingProfileFields do
             type="tel"
             label={gettext("Phone")}
             placeholder="+372 5555 5555"
+            required={@require_phone}
           />
         </div>
       </div>

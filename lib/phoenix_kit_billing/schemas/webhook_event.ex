@@ -66,13 +66,17 @@ defmodule PhoenixKitBilling.WebhookEvent do
 
   @doc """
   Changeset for marking an event as processed.
+
+  `note` is left in `error_message` for an event that was acknowledged
+  without being applied (a refund matching no payment); a plain success
+  clears it.
   """
-  def processed_changeset(event) do
+  def processed_changeset(event, note \\ nil) do
     event
     |> change(%{
       processed: true,
       processed_at: UtilsDate.utc_now(),
-      error_message: nil
+      error_message: note
     })
   end
 

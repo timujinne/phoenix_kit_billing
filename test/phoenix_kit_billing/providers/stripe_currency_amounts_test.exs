@@ -113,6 +113,24 @@ defmodule PhoenixKitBilling.Providers.StripeCurrencyAmountsTest do
                )
     end
 
+    test "an invoice with nothing left to pay is refused before any network call" do
+      for {total, paid} <- [{"25.00", "25.00"}, {"0", "0"}] do
+        invoice = %{
+          uuid: Ecto.UUID.generate(),
+          currency: "USD",
+          total: Decimal.new(total),
+          paid_amount: Decimal.new(paid),
+          line_items: [%{"name" => "Widget", "quantity" => 1, "unit_price" => total}]
+        }
+
+        assert {:error, :nothing_to_pay} =
+                 Stripe.create_checkout_session(invoice,
+                   success_url: "https://example.com/ok",
+                   cancel_url: "https://example.com/cancel"
+                 )
+      end
+    end
+
     test "an invoice with no currency at all still raises ArgumentError (§7.1 unchanged)" do
       invoice = %{
         uuid: Ecto.UUID.generate(),

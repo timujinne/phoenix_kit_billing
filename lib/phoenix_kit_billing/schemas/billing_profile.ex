@@ -187,6 +187,7 @@ defmodule PhoenixKitBilling.BillingProfile do
   ## Options
 
     * `:require_email` - also require `:email` (default `false`)
+    * `:require_phone` - also require `:phone` (default `false`)
     * `:require_address` - also require `:address_line1`, `:city`,
       `:postal_code` and `:country` (default `false`). A blank `country` param
       counts as missing here, although Ecto would otherwise replace it with the
@@ -234,11 +235,12 @@ defmodule PhoenixKitBilling.BillingProfile do
 
   defp required_by_opts(opts) do
     email = if Keyword.get(opts, :require_email, false), do: [:email], else: []
+    phone = if Keyword.get(opts, :require_phone, false), do: [:phone], else: []
 
     address =
       if Keyword.get(opts, :require_address, false), do: @address_required_fields, else: []
 
-    email ++ address
+    email ++ phone ++ address
   end
 
   defp validate_type_specific_fields(changeset) do
