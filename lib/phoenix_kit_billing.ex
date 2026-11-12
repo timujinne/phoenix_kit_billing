@@ -2973,6 +2973,11 @@ defmodule PhoenixKitBilling do
   ## Options
 
   - `:actor_uuid` - the user who does it, kept in `trashed_by_uuid`
+  - `:reason` - why, optional. Cut like the `cancel_order/3` reason, and appended
+    to `internal_notes` (the stored ones) as a line
+    `"Trashed <YYYY-MM-DD HH:MM UTC>: <reason>"`, after a blank line when there
+    are notes already, in the same write as the trash fields. Without one, or
+    with a blank one, the notes are not touched.
 
   Takes a row lock on the order and decides on the stored row, not the struct's:
   the order may have been confirmed, or been given an invoice, since it was read.
@@ -2995,7 +3000,7 @@ defmodule PhoenixKitBilling do
         # or waits and then finds the order in the trash.
         case lock_order_for_update(uuid) do
           nil -> {:error, :not_found}
-          %Order{} = locked -> trash_locked_order(locked, opts[:actor_uuid])
+          %Order{} = locked -> trash_locked_order(locked, opts)
         end
       end)
 
@@ -3009,7 +3014,7 @@ defmodule PhoenixKitBilling do
     end
   end
 
-  defp trash_locked_order(locked, actor_uuid) do
+  defp trash_locked_order(locked, opts) do
     cond do
       Order.trashed?(locked) ->
         {:error, :already_trashed}
@@ -3021,7 +3026,10 @@ defmodule PhoenixKitBilling do
         {:error, :order_has_open_invoices}
 
       true ->
-        locked |> Order.trash_changeset(actor_uuid) |> repo().update()
+        locked
+        |> Order.trash_changeset(opts[:actor_uuid])
+        |> put_reason_note("Trashed", locked.internal_notes, normalize_reason(opts[:reason]))
+        |> repo().update()
     end
   end
 
@@ -4993,7 +5001,7 @@ defmodule PhoenixKitBilling do
 
   @reason_max_length 500
 
-  @doc "The longest reason `void_invoice/3` and `cancel_order/3` keep; longer ones are cut."
+  @doc "The longest reason `void_invoice/3`, `cancel_order/3` and `trash_order/2` keep; longer ones are cut."
   def reason_max_length, do: @reason_max_length
 
   @doc false
