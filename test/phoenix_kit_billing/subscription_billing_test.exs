@@ -492,6 +492,144 @@ defmodule PhoenixKitBilling.SubscriptionBillingTest do
       assert dunning_jobs() == []
     end
 
+    test "at the last attempt, a period paid by bank transfer moves on instead of ending" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(invoice)
+      Repo.delete_all(Oban.Job)
+
+      subscription
+      |> reload()
+      |> Ecto.Changeset.change(renewal_attempts: 3)
+      |> Repo.update!()
+
+      assert {:ok, %Subscription{status: "active"}} = dun(subscription)
+      assert flush_charges() == []
+      assert [%Invoice{status: "paid"}] = invoices(subscription)
+    end
+
+    test "paying an invoice of another period queues no retry off the schedule" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+
+      # not the current period's any more: the run it queued would find the period
+      # unpaid and charge the card a second time that day
+      Repo.update_all(from(i in Invoice, where: i.uuid == ^invoice.uuid),
+        set: [metadata: %{"period_end" => "2020-01-01T00:00:00Z"}]
+      )
+
+      assert {:ok, _} = Billing.mark_invoice_paid(Repo.get!(Invoice, invoice.uuid))
+      assert dunning_jobs() == []
+    end
+
+    test "a queued paid-period retry does not charge a later unpaid period" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(invoice)
+      assert [paid_period_job] = dunning_jobs()
+
+      # Another retry moves the paid period on before this job runs. The next
+      # renewal fails too, so the subscription is past due again, for a new period.
+      assert {:ok, %Subscription{status: "active"}} = dun(subscription)
+      decline()
+      assert {:ok, %Subscription{status: "past_due"} = later} = renew(reload(subscription))
+      flush_charges()
+      approve()
+
+      assert :ok = SubscriptionDunningWorker.perform(paid_period_job)
+      assert flush_charges() == []
+      assert reload(subscription).current_period_end == later.current_period_end
+      assert reload(subscription).renewal_attempts == later.renewal_attempts
+      assert Enum.count(invoices(subscription), &(&1.status == "paid")) == 1
+
+      assert Enum.any?(dunning_jobs(), fn job ->
+               job.state == "scheduled" and
+                 job.args["period_end"] == DateTime.to_iso8601(later.current_period_end)
+             end)
+    end
+
+    test "does not charge a period that changed after the initial dunning read" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(invoice)
+      later_period_end = DateTime.add(subscription.current_period_end, 30, :day)
+
+      after_dunning_read(fn ->
+        Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+          set: [current_period_end: later_period_end]
+        )
+      end)
+
+      approve()
+      assert {:ok, :skipped} = dun(subscription)
+      assert flush_charges() == []
+      assert reload(subscription).current_period_end == later_period_end
+      assert [%Invoice{status: "paid"}] = invoices(subscription)
+    end
+
+    test "a paid period that cannot move on is retried without counting an attempt" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(invoice)
+      Repo.delete_all(Oban.Job)
+
+      # what `SubscriptionCharge` declines under the locks after the paid check; a
+      # refund landing in between takes the same callback
+      Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+        set: [subscription_type_uuid: nil]
+      )
+
+      before = reload(subscription)
+      assert {:ok, {:declined, :no_plan}} = dun(before)
+      assert %Subscription{status: "past_due", renewal_attempts: attempts} = reload(subscription)
+      assert attempts == before.renewal_attempts
+      assert [%Oban.Job{state: "scheduled"}] = dunning_jobs()
+    end
+
+    # `dun/1` calls the worker directly, so the row Oban would be running is not in
+    # the table. The payment queues that row and Oban marks it executing before
+    # `perform/1`; uniqueness that counts `:executing` then drops the next day.
+    test "a paid period that cannot move on still queues the next day while that retry is running" do
+      subscription = past_due_subscription!()
+      [invoice] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(invoice)
+      assert [%Oban.Job{state: "available"} = running] = dunning_jobs()
+
+      {1, _} =
+        Repo.update_all(from(j in Oban.Job, where: j.id == ^running.id),
+          set: [state: "executing"]
+        )
+
+      Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+        set: [subscription_type_uuid: nil]
+      )
+
+      before = reload(subscription)
+      assert {:ok, {:declined, :no_plan}} = dun(before)
+      assert reload(subscription).renewal_attempts == before.renewal_attempts
+
+      # `all_enqueued/1` hides an executing job, which is the row this has to keep.
+      states =
+        Oban.Job
+        |> where([j], j.worker == ^inspect(SubscriptionDunningWorker))
+        |> Repo.all()
+        |> Enum.map(& &1.state)
+        |> Enum.sort()
+
+      assert states == ["executing", "scheduled"]
+    end
+
+    test "a decline does not queue a second retry while one is already scheduled" do
+      subscription = past_due_subscription!()
+      decline()
+
+      assert {:ok, _} = dun(subscription)
+      assert [_scheduled] = dunning_jobs()
+
+      assert {:ok, _} = dun(reload(subscription))
+      assert [%Oban.Job{state: "scheduled"}] = dunning_jobs()
+    end
+
     test "giving up leaves an invoice with money on it for an operator" do
       subscription = past_due_subscription!()
       [invoice] = invoices(subscription)
@@ -531,6 +669,73 @@ defmodule PhoenixKitBilling.SubscriptionBillingTest do
       assert dunning_jobs() == []
     end
 
+    # Attach the card after dunning reads the subscription, before the charge
+    # reloads it under its lock. The initial struct still has no payment method.
+    defp attach_card_after_dunning_read(subscription) do
+      Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+        set: [payment_method_uuid: nil]
+      )
+
+      after_dunning_read(fn ->
+        Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+          set: [payment_method_uuid: subscription.payment_method_uuid]
+        )
+
+        send(self(), :card_attached)
+      end)
+    end
+
+    defp after_dunning_read(fun) do
+      handler_id = {__MODULE__, make_ref()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:phoenix_kit_billing, :test, :repo, :query],
+        fn _event, _measurements, %{query: query}, _config ->
+          if self() == test_pid and query =~ ~s(FROM "phoenix_kit_subscriptions") do
+            :telemetry.detach(handler_id)
+            fun.()
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    test "counts a card decline when the card was attached after the initial read" do
+      subscription = past_due_subscription!()
+      attach_card_after_dunning_read(subscription)
+      decline()
+
+      assert {:ok, {:declined, _reason}} = dun(subscription)
+      assert_received :card_attached
+      assert [_charge] = flush_charges()
+      assert reload(subscription).renewal_attempts == subscription.renewal_attempts + 1
+      assert [%Oban.Job{state: "scheduled"}] = dunning_jobs()
+    end
+
+    test "does not retry an unrecorded charge on a card attached after the initial read" do
+      subscription = past_due_subscription!()
+      attach_card_after_dunning_read(subscription)
+
+      approve(fn ->
+        Repo.update_all(from(i in Invoice, where: i.user_uuid == ^subscription.user_uuid),
+          set: [status: "void"]
+        )
+      end)
+
+      capture_log(fn ->
+        assert {:ok, {:charged_not_recorded, _reason}} = dun(subscription)
+      end)
+
+      assert_received :card_attached
+      assert [_charge] = flush_charges()
+      assert reload(subscription).status == "past_due"
+      assert dunning_jobs() == []
+    end
+
     test "without a usable card does not fail the job, and comes back" do
       subscription = past_due_subscription!()
 
@@ -543,6 +748,129 @@ defmodule PhoenixKitBilling.SubscriptionBillingTest do
       refute match?({:error, _}, result)
       assert flush_charges() == []
       assert [_next] = dunning_jobs()
+    end
+  end
+
+  describe "a subscription paid by invoice, without a card" do
+    # bank transfer: the renewal makes the period's invoice, nothing can be charged,
+    # and the subscriber pays the invoice, which an operator marks paid
+    defp invoiced_subscription! do
+      subscription = renewed_without_card!()
+      Repo.delete_all(Oban.Job)
+      subscription
+    end
+
+    # with the retry the renewal scheduled for tomorrow still queued
+    defp renewed_without_card! do
+      subscription = subscription!()
+
+      Repo.update_all(from(s in Subscription, where: s.uuid == ^subscription.uuid),
+        set: [payment_method_uuid: nil]
+      )
+
+      {:ok, _} = renew(subscription)
+      reload(subscription)
+    end
+
+    defp job_states, do: dunning_jobs() |> Enum.map(& &1.state) |> Enum.sort()
+
+    test "is past due with the period's invoice open after the renewal" do
+      subscription = invoiced_subscription!()
+      assert %Subscription{status: "past_due"} = subscription
+      assert [%Invoice{status: status}] = invoices(subscription)
+      assert status in ["draft", "sent"]
+    end
+
+    test "marking the invoice paid queues a retry, which starts the next period without a charge" do
+      subscription = invoiced_subscription!()
+      [open] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(open)
+      assert [_job] = dunning_jobs()
+
+      assert {:ok, %Subscription{status: "active"}} = dun(subscription)
+      assert flush_charges() == []
+      renewed = reload(subscription)
+      assert renewed.status == "active"
+      assert DateTime.compare(renewed.current_period_end, subscription.current_period_end) == :gt
+    end
+
+    test "marking the invoice paid queues a retry now, beside the one scheduled for tomorrow" do
+      subscription = renewed_without_card!()
+      assert job_states() == ["scheduled"]
+      [open] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(open)
+      assert job_states() == ["available", "scheduled"]
+    end
+
+    test "a second mark-paid is refused and queues nothing more" do
+      subscription = renewed_without_card!()
+      [open] = invoices(subscription)
+      assert {:ok, _} = Billing.mark_invoice_paid(open)
+      assert {:error, :invoice_not_payable} = Billing.mark_invoice_paid(open)
+      assert job_states() == ["available", "scheduled"]
+    end
+
+    test "a payment recorded for the whole amount queues a retry" do
+      subscription = invoiced_subscription!()
+      [open] = invoices(subscription)
+
+      assert {:ok, _} =
+               Billing.record_payment(
+                 open,
+                 %{amount: Decimal.to_string(open.total), payment_method: "bank"},
+                 nil
+               )
+
+      assert [%Oban.Job{state: "available"}] = dunning_jobs()
+      assert {:ok, %Subscription{status: "active"}} = dun(subscription)
+      assert flush_charges() == []
+    end
+
+    test "a part payment queues nothing" do
+      subscription = invoiced_subscription!()
+      [open] = invoices(subscription)
+
+      assert {:ok, _} =
+               Billing.record_payment(open, %{amount: "1.00", payment_method: "bank"}, nil)
+
+      assert dunning_jobs() == []
+    end
+
+    test "marking it paid inside a transaction queues nothing" do
+      subscription = invoiced_subscription!()
+      [open] = invoices(subscription)
+      assert {:ok, {:ok, _}} = Repo.transaction(fn -> Billing.mark_invoice_paid(open) end)
+      assert dunning_jobs() == []
+    end
+
+    test "after a void of the invoice, a retry issues another and counts no attempt" do
+      subscription = invoiced_subscription!()
+      [voided] = invoices(subscription)
+      assert {:ok, _} = Billing.void_invoice(voided)
+
+      assert {:ok, :no_payment_method} = dun(subscription)
+
+      assert [%Invoice{status: "sent"}] =
+               Enum.reject(invoices(subscription), &(&1.uuid == voided.uuid))
+
+      assert reload(subscription).renewal_attempts == subscription.renewal_attempts
+      assert flush_charges() == []
+    end
+
+    test "unpaid, a retry waits for the next day and counts no attempt" do
+      subscription = invoiced_subscription!()
+      assert {:ok, :no_payment_method} = dun(subscription)
+      assert %Subscription{status: "past_due", renewal_attempts: attempts} = reload(subscription)
+      assert attempts == subscription.renewal_attempts
+      assert [_next] = dunning_jobs()
+      assert flush_charges() == []
+    end
+
+    test "a card renewal that pays its invoice queues no extra retry" do
+      subscription = subscription!()
+      approve()
+      assert {:ok, %Subscription{status: "active"}} = renew(subscription)
+      assert dunning_jobs() == []
     end
   end
 

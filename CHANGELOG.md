@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.28.0 - 2026-11-15
+
+A subscriber who pays by invoice instead of a card stays subscribed: paying the
+period's invoice moves the subscription on to its next period. Core 3.5.0 is now the
+floor.
+
+**Upgrading.** Needs core 3.5.0 or later: update core first if the host is on 3.4.
+Billing has no migration. Dunning jobs queued before the upgrade still run.
+
+### Fixed
+
+- **A subscription paid by invoice moves on to its next period.** Without a saved
+  payment method (a subscriber paying by bank transfer), a renewal leaves the period's
+  invoice open and the subscription past due. Marking that invoice paid, or recording
+  its payment by hand, left the subscription past due until the grace period ran out
+  and dunning cancelled it, paid: dunning skipped the charge path for a subscription
+  with no card, so it never found the invoice paid. Dunning now runs that path without
+  a card, which starts the next period when the invoice is paid and waits for the next
+  day as before when it is not, counting no attempt. Paying the period's invoice in full
+  outside a charge (*Mark paid*, a payment recorded by hand, or a provider webhook) also
+  queues a retry at once, so the subscription is active again within seconds; that retry
+  is not dropped next to the one scheduled for the next day. If that run cannot move the
+  period on, it still schedules the next day, including while it is the job Oban is
+  running. A part payment queues none, and neither does paying an invoice of another
+  period, or a payment made inside the caller's own transaction: there the scheduled
+  retry moves the subscription on. Failing to queue that retry is logged and never turns
+  the committed payment into an error.
+- **A period paid by bank transfer is not cancelled at the last retry.** Dunning
+  checked the attempts and the grace period before anything else, so a subscription
+  whose last card retry was due ended even though its invoice had been marked paid.
+  A paid period now moves on first.
+
+### Changed
+
+Changes that can break a caller:
+
+- **Requires `phoenix_kit >= 3.5.0 and < 4.0.0`** (was `>= 3.4.0`), the ecosystem-wide
+  minimum core. A host on core 3.4 updates core first. Billing has no migration.
+
+Other changes:
+
+- Dunning for a subscription without a card takes the charge path, which makes the
+  period's invoice when it has none, as it does for a card. So if that invoice is
+  voided, the next retry issues a new one.
+- A dunning job belongs to the period it was queued for (`period_end` in its args) and
+  does nothing once the subscription has moved to another period, so a delayed retry
+  cannot charge a later period off its schedule. A job without `period_end`, such as
+  one queued before this release or by hand, runs as before.
+- A card attached while a no-card retry runs is charged like any card retry: a decline
+  counts an attempt, and a charge the ledger refused is not retried.
+
 ## 0.27.0 - 2026-11-06
 
 Subscriptions pay in advance, at the price they started on, with the tax inside that

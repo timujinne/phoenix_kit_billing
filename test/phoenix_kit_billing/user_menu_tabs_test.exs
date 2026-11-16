@@ -20,8 +20,6 @@ defmodule PhoenixKitBilling.UserMenuTabsTest do
     def enabled?, do: :persistent_term.get(__MODULE__, true)
   end
 
-  @moduletag :requires_core_user_menu
-
   test "both user tabs are gated on the shop module" do
     tabs = PhoenixKitBilling.user_dashboard_tabs()
     assert Enum.map(tabs, & &1.id) == [:dashboard_orders, :dashboard_billing_profiles]

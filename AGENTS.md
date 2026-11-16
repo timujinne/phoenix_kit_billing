@@ -11,7 +11,7 @@ they live in this module's tables and providers only collect money. Ships admin
 LiveViews for every entity, two customer pages, print views, provider webhook
 endpoints, and Oban workers for renewals and dunning.
 
-- **Depends on:** `phoenix_kit` `>= 3.4.0 and < 4.0.0` (Hex). No sibling `phoenix_kit_*` deps.
+- **Depends on:** `phoenix_kit` `>= 3.5.0 and < 4.0.0` (Hex). No sibling `phoenix_kit_*` deps.
   Runtime libraries: `phoenix_live_view ~> 1.1`, `phoenix ~> 1.7`,
   `ecto_sql ~> 3.13`, `oban ~> 2.20`, `uuidv7 ~> 1.0`, `stripity_stripe ~> 3.2`,
   `req ~> 0.5`, `jason ~> 1.4`, `gettext ~> 1.0`.
@@ -420,21 +420,13 @@ setting.
 
 ### Core compatibility
 
-`mix.exs` requires `phoenix_kit >= 3.4.0 and < 4.0.0` — every core from 3.4.0
-through 3.x and nothing else. Core 1.7 is excluded because core 2.0.0 squashed the
-migration chain into a single `V135` baseline, and this module is verified only
-against that baseline. The 3.4.0 floor is the core this module is built and tested
-against: no API of 3.4.0 needs it, so it is a statement of what has been run, not of
-what is required. Core 3.x stops creating this module's tables and this module's own
-chain builds them. 2.65.0's `file_references/0` and `expected_schema/0` callbacks,
-which carry `@impl PhoenixKit.Module`, 2.44.0's email `markdown` parts,
-layout groups (`layout: "billing"`) and `email_templates/0` preview callback,
-2.38.0's `PhoenixKitWeb.Actor` and `PhoenixKit.Activity.log/3`, and 2.26's
-`<.decimal_input>` and `PhoenixKit.Utils.Number.parse_decimal/2`, are subsumed.
+`mix.exs` requires `phoenix_kit >= 3.5.0 and < 4.0.0` — every core from 3.5.0
+through 3.x and nothing else. 3.5.0 is the ecosystem-wide minimum core. Core 3.x
+does not create this module's tables; this module's own chain builds them.
 Adopting a newer core API means raising the floor in the same commit.
 `test/core_pin_conformance_test.exs` guards the requirement in both directions:
-it fails if the pin is re-narrowed to a single minor (a three-segment `~> 2.38.0`
-admits no 2.39), if it re-admits a core below the floor or 1.7, or if a local
+it fails if the pin is re-narrowed to a single minor (a three-segment `~> 3.5.0`
+admits no 3.6), if it re-admits a core below the floor, or if a local
 `path:` override reaches a commit.
 
 That covers *which* core resolves, not whether it still exports what this package
@@ -567,7 +559,9 @@ Test database `phoenix_kit_billing_test`. Unit tests (schemas, changesets, pure
 functions, the migration-statement parsers, the pin and pot guards) always run.
 DB-backed tests are tagged `:integration` through `PhoenixKitBilling.DataCase` and
 are excluded automatically when the database is absent or unreachable — the helper
-probes with `psql -lqt` and falls back to a connection attempt.
+makes one classified connection attempt with the repo's own credentials and
+transport (core's `PhoenixKit.TestSupport.PostgresPreflight`) and prints the
+reason when it fails.
 
 `test/test_helper.exs`:
 
@@ -592,12 +586,6 @@ probes with `psql -lqt` and falls back to a connection attempt.
   router matches admin paths at `/en/admin/billing/...`.
 - Starts `PhoenixKitBilling.Test.Endpoint` (with `server: false`) only when the
   database is available.
-- Excludes `:requires_phoenix_kit_i18n_api` when the resolved core lacks
-  `PhoenixKit.Dashboard.Tab.localized_label/1`; those tests re-enable themselves on
-  a core that ships it.
-- Excludes `:requires_core_user_menu` when the resolved core lacks
-  `PhoenixKit.Dashboard.Tab.user_menu?/2`; likewise re-enabled by a core that
-  ships it.
 
 Support modules under `test/support/`: `DataCase` (Ecto SQL sandbox),
 `LiveCase` (LiveView cases wired to the test `Endpoint` + `Router`), `Test.Repo`,

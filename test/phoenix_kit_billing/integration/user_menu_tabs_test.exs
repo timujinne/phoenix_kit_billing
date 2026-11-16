@@ -9,8 +9,6 @@ defmodule PhoenixKitBilling.Integration.UserMenuTabsTest do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitWeb.Components.UserDashboardNav
 
-  @moduletag :requires_core_user_menu
-
   defmodule StubShop do
     @moduledoc false
     def module_key, do: "shop"

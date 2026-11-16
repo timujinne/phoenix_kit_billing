@@ -1,5 +1,3 @@
-require Logger
-
 # Test helper for PhoenixKitBilling.
 #
 # Level 1: Unit tests (schemas, changesets, pure functions) always run.
@@ -47,28 +45,24 @@ db_name =
 # alongside (not instead of) the external `pk-test` wrapper.
 PhoenixKitBilling.Test.LiveDatabaseGuard.check!(db_name)
 
+# One classified connection attempt, with the repo's OWN credentials and
+# transport, before anything starts the pool.
+#
+# This replaces a `psql -lqt` listing. That check asked the wrong question:
+# it ran as the shell's user over a unix socket, so it reported "the
+# database is there" and said nothing about whether the CONFIGURED role
+# could reach it over TCP. When it could not, the answer arrived minutes
+# later as a pool checkout timeout that reads like a flaky test.
 db_check =
-  if Code.ensure_loaded?(PhoenixKit.TestSupport.PostgresPreflight) do
-    # One classified connection attempt, with the repo's OWN credentials and
-    # transport, before anything starts the pool.
-    #
-    # This replaces a `psql -lqt` listing. That check asked the wrong question:
-    # it ran as the shell's user over a unix socket, so it reported "the
-    # database is there" and said nothing about whether the CONFIGURED role
-    # could reach it over TCP. When it could not, the answer arrived minutes
-    # later as a pool checkout timeout that reads like a flaky test.
-    case PhoenixKit.TestSupport.PostgresPreflight.check(
-           Application.get_env(:phoenix_kit_billing, PhoenixKitBilling.Test.Repo, [])
-         ) do
-      :ok ->
-        :exists
+  case PhoenixKit.TestSupport.PostgresPreflight.check(
+         Application.get_env(:phoenix_kit_billing, PhoenixKitBilling.Test.Repo, [])
+       ) do
+    :ok ->
+      :exists
 
-      {:error, _reason, message} ->
-        IO.puts(:stderr, "\n" <> message)
-        :not_found
-    end
-  else
-    :try_connect
+    {:error, _reason, message} ->
+      IO.puts(:stderr, "\n" <> message)
+      :not_found
   end
 
 repo_available =
@@ -165,60 +159,6 @@ if repo_available do
   {:ok, _} = PhoenixKitBilling.Test.Endpoint.start_link()
 end
 
-# i18n tests require phoenix_kit with the `gettext_backend` API
-# (see BeamLabEU/phoenix_kit#522). When building against an older
-# published phoenix_kit lacking `PhoenixKit.Dashboard.Tab.localized_label/1`,
-# exclude those tests — they run automatically once the dep resolves to a
-# release that includes the API.
-i18n_exclude =
-  if Code.ensure_loaded?(PhoenixKit.Dashboard.Tab) and
-       function_exported?(PhoenixKit.Dashboard.Tab, :localized_label, 1) do
-    []
-  else
-    Logger.info(
-      "[test_helper] PhoenixKit.Dashboard.Tab.localized_label/1 not available — " <>
-        "i18n tests excluded. They will run automatically once `phoenix_kit` is " <>
-        "upgraded to a release that ships the gettext_backend API."
-    )
-
-    [:requires_phoenix_kit_i18n_api]
-  end
-
 integration_exclude = if repo_available, do: [], else: [:integration]
 
-# The avatar-dropdown flag (`Tab` option `:user_menu`, read by
-# `Tab.user_menu?/2`). An older core ignores the option, so the tests about
-# it run once the dep resolves to a release that ships it.
-user_menu_exclude =
-  if Code.ensure_loaded?(PhoenixKit.Dashboard.Tab) and
-       function_exported?(PhoenixKit.Dashboard.Tab, :user_menu?, 2) do
-    []
-  else
-    Logger.info(
-      "[test_helper] PhoenixKit.Dashboard.Tab.user_menu?/2 not available - avatar-dropdown " <>
-        "tab tests excluded. They will run automatically once `phoenix_kit` is " <>
-        "upgraded to a release that ships it."
-    )
-
-    [:requires_core_user_menu]
-  end
-
-# `migrations_build_alone_test.exs` uses core's
-# `PhoenixKit.TestSupport.ModuleChainCheck`, which the first core release after
-# 2.64.1 ships; against an older core in `deps/` it is excluded.
-chain_check_exclude =
-  if Code.ensure_loaded?(PhoenixKit.TestSupport.ModuleChainCheck),
-    do: [],
-    else: [:requires_module_chain_check]
-
-ExUnit.start(
-  exclude: i18n_exclude ++ integration_exclude ++ user_menu_exclude ++ chain_check_exclude
-)
-
-# The manifest test builds the module's tables with `ModuleChainCheck.build_alone/4`
-# and hands the manifest to repair (`PhoenixKit.Module.expected_schema/0`); both
-# arrive in the first core release after 2.64.1.
-unless Code.ensure_loaded?(PhoenixKit.TestSupport.ModuleChainCheck) and
-         function_exported?(PhoenixKit.TestSupport.ModuleChainCheck, :build_alone, 4) do
-  ExUnit.configure(exclude: [:requires_core_expected_schema | ExUnit.configuration()[:exclude]])
-end
+ExUnit.start(exclude: integration_exclude)

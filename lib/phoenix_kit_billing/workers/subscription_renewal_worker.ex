@@ -155,7 +155,7 @@ defmodule PhoenixKitBilling.Workers.SubscriptionRenewalWorker do
         "Grace period until #{past_due.grace_period_end}"
     )
 
-    schedule_dunning(subscription.uuid)
+    schedule_dunning(subscription)
 
     {:ok, past_due}
   end
@@ -163,9 +163,12 @@ defmodule PhoenixKitBilling.Workers.SubscriptionRenewalWorker do
   defp failure_message(:no_payment_method), do: "No payment method configured"
   defp failure_message(reason), do: inspect(reason)
 
-  defp schedule_dunning(subscription_uuid) do
+  defp schedule_dunning(%Subscription{} = subscription) do
     # Schedule dunning worker to retry in 24 hours
-    %{subscription_uuid: subscription_uuid}
+    %{
+      subscription_uuid: subscription.uuid,
+      period_end: DateTime.to_iso8601(subscription.current_period_end)
+    }
     |> SubscriptionDunningWorker.new(schedule_in: 86_400)
     |> Oban.insert()
   end

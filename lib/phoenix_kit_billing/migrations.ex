@@ -381,6 +381,8 @@ defmodule PhoenixKitBilling.Migrations do
 
   use Ecto.Migration
 
+  alias PhoenixKit.Migrations.Postgres.Helpers
+
   @current_version 8
   @marker_prefix "pkb_schema:"
   @version_table "phoenix_kit_payment_provider_configs"
@@ -1600,23 +1602,8 @@ defmodule PhoenixKitBilling.Migrations do
     # prefix core would refuse produces index names that differ from
     # core's while every command still exits 0, breaking the one contract
     # adoption rests on: core's exact object names.
-    # `Code.ensure_loaded?` before `function_exported?`: the latter answers
-    # false for a module that simply has not been loaded yet, which under a
-    # release (and in `mix run --no-start`) is the normal state — the check
-    # would silently take the fallback branch and defeat its own purpose.
-    helpers = PhoenixKit.Migrations.Postgres.Helpers
-
-    if Code.ensure_loaded?(helpers) and function_exported?(helpers, :validate_prefix!, 1) do
-      helpers.validate_prefix!(prefix)
-    else
-      # Older core without the shared validator: apply core's documented
-      # rules here rather than restating a looser local copy that could
-      # drift — lower-case identifiers only, capped at 20 bytes (measured
-      # from the longest embedded object name, 63 - 1 - 42).
-      unless is_binary(prefix) and prefix =~ ~r/^[a-z_][a-z0-9_]*$/ and byte_size(prefix) <= 20 do
-        raise ArgumentError, "invalid schema prefix: #{inspect(prefix)}"
-      end
-    end
+    # Core's validator ships with every core this package admits (>= 3.5.0).
+    Helpers.validate_prefix!(prefix)
 
     prefix
   end

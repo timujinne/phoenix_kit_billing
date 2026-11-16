@@ -3,10 +3,9 @@ defmodule PhoenixKitBilling.CoreCompat do
   The PhoenixKit core surface this package calls, in one list, checked against
   whichever core actually resolved.
 
-  `mix.exs` requires `phoenix_kit ~> 2.0` — every core 2.x, and nothing else;
-  core 1.7 is excluded because 2.0.0 squashed the migration chain to a `V135`
-  floor this module is verified against (see `core_pin_conformance_test.exs`).
-  Admitting a minor is not the same as working on one: 2.1 may move or drop
+  `mix.exs` requires `phoenix_kit >= 3.5.0 and < 4.0.0` — every core from
+  3.5.0 through 3.x, and nothing else (see `core_pin_conformance_test.exs`).
+  Admitting a minor is not the same as working on one: 3.6 may move or drop
   anything. What this module buys is a legible failure — the surface is declared
   here, so a core that moved something reports a named list at boot and in the
   test suite, instead of raising `UndefinedFunctionError` at whichever call site
@@ -37,7 +36,7 @@ defmodule PhoenixKitBilling.CoreCompat do
   # by hand below.
   @runtime_calls [
     {PhoenixKit.Activity, :log, 3},
-    # The generated `ExpectedSchema` validates the prefix it is handed.
+    # `Migrations` and the generated `ExpectedSchema` validate the prefix they are handed.
     {PhoenixKit.Migrations.Postgres.Helpers, :validate_prefix!, 1},
     # InvoiceEvents and OrderEvents find modules declaring their handler callbacks.
     {PhoenixKit.ModuleRegistry, :all_modules, 0},

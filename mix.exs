@@ -1,7 +1,7 @@
 defmodule PhoenixKitBilling.MixProject do
   use Mix.Project
 
-  @version "0.27.0"
+  @version "0.28.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_billing"
 
   def project do
@@ -111,17 +111,9 @@ defmodule PhoenixKitBilling.MixProject do
       # transitively via ex_aws/stripity_stripe - so scoping it to the environments
       # that actually resolve it costs consumers nothing.
       {:hackney, "~> 4.0", override: true, only: [:dev, :test]},
-      # 2.44.0 is the floor now: the email defaults are a `markdown` part
-      # wrapped in the `billing` layout group, and the four emails register
-      # with core's preview through `email_templates/0` — all first shipped in
-      # 2.44.0. A lower core does not know the `markdown` part, so a billing
-      # email's HTML would be its plain text escaped into paragraphs.
-      # (2.38.0 brought the actor and the activity log, still required.)
-      # Patch-precise floor in the compound form, so the ceiling stays open
-      # through every later 2.x minor (see test/core_pin_conformance_test.exs).
-      # Floor 3.4.0: the core this module is built and tested against. The ceiling is
-      # open through core 3.x.
-      pk_dep(:phoenix_kit, ">= 3.4.0 and < 4.0.0"),
+      # Floor 3.5.0, the ecosystem-wide minimum core. The ceiling is open
+      # through core 3.x (see test/core_pin_conformance_test.exs).
+      pk_dep(:phoenix_kit, ">= 3.5.0 and < 4.0.0"),
       # mdex_native (pulled in transitively through phoenix_kit's mdex dep)
       # builds from source when MDEX_NATIVE_BUILD=1 is set in the
       # environment; that path requires rustler itself, not just

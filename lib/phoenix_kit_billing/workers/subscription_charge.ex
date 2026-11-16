@@ -107,6 +107,15 @@ defmodule PhoenixKitBilling.Workers.SubscriptionCharge do
   end
 
   @doc """
+  Whether the subscription's current period has a paid invoice: `run/2` would move it
+  to the next period without a charge.
+  """
+  @spec period_paid?(Subscription.t()) :: boolean()
+  def period_paid?(%Subscription{} = subscription) do
+    match?(%Invoice{status: "paid"}, find_period_invoice(subscription))
+  end
+
+  @doc """
   Takes the first payment of a subscription just created, which has a period of no
   length until it is paid.
 

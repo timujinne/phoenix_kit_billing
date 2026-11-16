@@ -67,6 +67,7 @@ defmodule PhoenixKitBilling do
   alias PhoenixKitBilling.Providers
   alias PhoenixKitBilling.Transaction
   alias PhoenixKitBilling.Workers.SubscriptionCharge
+  alias PhoenixKitBilling.Workers.SubscriptionDunningWorker
   alias PhoenixKitWeb.Live.Settings.Organization
 
   require Logger
@@ -4767,6 +4768,7 @@ defmodule PhoenixKitBilling do
         {:ok, {paid_invoice, order_broadcasts}} ->
           Events.broadcast_invoice_paid(paid_invoice)
           Enum.each(order_broadcasts, fn {fun, arg} -> apply(Events, fun, [arg]) end)
+          _ = resume_paid_subscription(paid_invoice)
           {:ok, paid_invoice}
 
         error ->
@@ -4774,6 +4776,73 @@ defmodule PhoenixKitBilling do
       end
     else
       {:error, :invoice_not_payable}
+    end
+  end
+
+  # A subscription's period invoice paid outside a charge (bank transfer marked paid,
+  # or a payment recorded by hand) leaves the subscription past due until something
+  # runs its charge again, which finds the invoice paid and starts the next period.
+  # Dunning does that, but only on its next day — and without a card it used to skip
+  # the charge altogether. Queue it now, after the commit. Inside a transaction this is
+  # the charge itself recording its payment (`SubscriptionCharge`), which moves the
+  # period on in the same transaction: nothing to queue.
+  #
+  # Only when the paid invoice leaves the CURRENT period paid. Any other invoice of a
+  # past-due subscription paid in full would queue a dunning run that finds the period
+  # unpaid and charges the card off its daily schedule.
+  # Carry that period into the job too: by the time it runs, another retry may have
+  # moved the subscription on and a later renewal may have failed.
+  #
+  # Unique among jobs ready to run only: the worker's own uniqueness covers every state
+  # for an hour, so it would drop this job next to the retry scheduled for tomorrow.
+  #
+  # Never raises: the payment is committed, and a crash here would report it to the
+  # caller as failed (an operator clicking again, a provider redelivering the webhook).
+  # The retry already scheduled moves the subscription on without this one.
+  defp resume_paid_subscription(%Invoice{subscription_uuid: uuid}) when is_binary(uuid) do
+    with false <- repo().in_transaction?(),
+         period_end when is_binary(period_end) <- past_due_paid_period(uuid) do
+      %{subscription_uuid: uuid, period_end: period_end}
+      |> SubscriptionDunningWorker.new(
+        unique: [period: 3600, keys: [:subscription_uuid, :period_end], states: [:available]]
+      )
+      |> Oban.insert()
+      |> case do
+        {:ok, _job} -> :ok
+        {:error, reason} -> warn_not_resumed(uuid, reason)
+      end
+    else
+      _ -> :ok
+    end
+  rescue
+    error -> warn_not_resumed(uuid, error, __STACKTRACE__)
+  end
+
+  defp resume_paid_subscription(_invoice), do: :ok
+
+  defp warn_not_resumed(subscription_uuid, reason, stacktrace \\ []) do
+    metadata = if stacktrace == [], do: [], else: [crash_reason: {reason, stacktrace}]
+
+    Logger.warning(
+      "Subscription #{subscription_uuid} stays past due until its next retry: " <>
+        "could not queue one now: #{inspect(reason)}",
+      metadata
+    )
+
+    :ok
+  end
+
+  defp past_due_paid_period(subscription_uuid) do
+    case repo().get_by(PhoenixKitBilling.Subscription,
+           uuid: subscription_uuid,
+           status: "past_due"
+         ) do
+      nil ->
+        nil
+
+      subscription ->
+        if SubscriptionCharge.period_paid?(subscription),
+          do: DateTime.to_iso8601(subscription.current_period_end)
     end
   end
 
@@ -6061,6 +6130,8 @@ defmodule PhoenixKitBilling do
 
       {:ok, {transaction, broadcasts}} ->
         Enum.each(broadcasts, fn {fun, arg} -> apply(Events, fun, [arg]) end)
+
+        for {:broadcast_invoice_paid, paid} <- broadcasts, do: resume_paid_subscription(paid)
         {:ok, transaction}
 
       error ->
@@ -7300,14 +7371,13 @@ defmodule PhoenixKitBilling do
     translated_country_name(code) || CountryData.get_country_name(code) || code
   end
 
-  # `BeamLabCountries` arrives with core; its translations module only in
-  # its later releases, so an older one falls back to the English name.
+  # `BeamLabCountries` arrives with core (`~> 2.1` from core 3.5.0), which ships the
+  # translations module; `nil` for a code it has no name for.
   defp translated_country_name(code) do
-    translations = BeamLabCountries.Translations
-
-    if Code.ensure_loaded?(translations) and function_exported?(translations, :get_name, 2) do
-      translations.get_name(code, base_locale(Gettext.get_locale(PhoenixKitBilling.Gettext)))
-    end
+    BeamLabCountries.Translations.get_name(
+      code,
+      base_locale(Gettext.get_locale(PhoenixKitBilling.Gettext))
+    )
   end
 
   @doc """

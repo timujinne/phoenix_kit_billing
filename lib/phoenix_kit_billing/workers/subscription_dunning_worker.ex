@@ -13,7 +13,10 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
      (see `SubscriptionCharge`), so the money reaches the ledger
   4. If payment succeeds → status = `active`
   5. If max attempts reached or grace period ends → status = `cancelled`, and the
-     invoice is voided: nothing is owed for a period that was not given
+     invoice is voided: nothing is owed for a period that was not given — unless the
+     period's invoice was paid some other way (*Mark paid*): that is looked at first,
+     and moves the period on while it stays paid. Refunded meanwhile, the run retries
+     without counting an attempt
 
   A declined retry is a handled outcome, not a failed job. Returned as an error, Oban
   would retry it within seconds: each try counts, so one decline would use up every
@@ -47,7 +50,7 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
   use Oban.Worker,
     queue: :billing,
     max_attempts: 5,
-    unique: [period: 3600, keys: [:subscription_uuid]]
+    unique: [period: 3600, keys: [:subscription_uuid, :period_end]]
 
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Settings
@@ -67,7 +70,14 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
         :ok
 
       subscription ->
-        process_dunning(subscription)
+        # Automatic retries belong to one period. Another retry may have settled
+        # it already, and this job must not charge a later period.
+        if is_nil(args["period_end"]) or
+             args["period_end"] == DateTime.to_iso8601(subscription.current_period_end) do
+          process_dunning(subscription)
+        else
+          :ok
+        end
     end
   end
 
@@ -89,6 +99,11 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
     max_attempts = get_max_attempts()
 
     cond do
+      # Paid some other way (bank transfer marked paid): the period moves on, whatever
+      # the attempts or the grace period say. Nothing is charged for a paid invoice.
+      SubscriptionCharge.period_paid?(subscription) ->
+        settle_paid_period(subscription)
+
       # Cancel BEFORE attempting if this attempt would push us past the
       # configured cap. `renewal_attempts` is the number of completed
       # failed attempts so far; the next try would be attempt N+1.
@@ -105,11 +120,24 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
     end
   end
 
+  # No card to charge, but the period may be paid already: an invoice paid by bank
+  # transfer and marked paid. `SubscriptionCharge.run/2` finds that invoice paid and
+  # moves the subscription on without a charge. Unpaid, it asks for a charge, gets
+  # `:no_payment_method`, and this waits for the next day as before: no attempt is
+  # counted, so a subscriber paying by invoice has the whole grace period.
+  # A card added since the initial read is charged under the lock; its outcome must
+  # use the normal decline accounting and charged-not-recorded handling.
   defp attempt_payment_retry(%Subscription{payment_method: nil} = subscription) do
-    Logger.warning("Subscription #{subscription.uuid} has no payment method for retry")
-    # Still schedule next retry in case user adds payment method
-    schedule_next_retry(subscription)
-    {:ok, :no_payment_method}
+    retry_charge(subscription, fn
+      locked, :no_payment_method ->
+        Logger.warning("Subscription #{locked.uuid} has no payment method for retry")
+        # Still schedule next retry in case user adds payment method
+        schedule_next_retry(locked)
+        {:ok, :no_payment_method}
+
+      locked, reason ->
+        handle_decline(locked, reason)
+    end)
   end
 
   defp attempt_payment_retry(%Subscription{} = subscription) do
@@ -131,12 +159,28 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
     end
   end
 
-  defp retry_charge(%Subscription{} = subscription) do
+  # Paid when looked at, so under the locks `SubscriptionCharge` finds it paid and moves
+  # the period on without a charge. Refunded in between, it is a retry like any other,
+  # except that a decline is not counted: the attempts cap is for a card that keeps
+  # being refused, and this subscriber had paid.
+  defp settle_paid_period(%Subscription{} = subscription) do
+    retry_charge(subscription, fn locked, reason ->
+      Logger.warning("Subscription #{locked.uuid} period is no longer paid: #{inspect(reason)}")
+
+      schedule_next_retry(locked)
+      {:ok, {:declined, reason}}
+    end)
+  end
+
+  defp retry_charge(%Subscription{} = subscription, declined \\ &handle_decline/2) do
     result =
       SubscriptionCharge.run(subscription,
         description: "Subscription renewal (dunning retry)",
-        due?: &Subscription.past_due?/1,
-        declined: &handle_decline/2
+        due?: fn locked ->
+          Subscription.past_due?(locked) and
+            DateTime.compare(locked.current_period_end, subscription.current_period_end) == :eq
+        end,
+        declined: declined
       )
 
     case result do
@@ -181,10 +225,31 @@ defmodule PhoenixKitBilling.Workers.SubscriptionDunningWorker do
   # Unconditional: `process_dunning/1` decides at the next run whether that is another
   # try or the end. Stopping here on the last attempt left the subscription past due
   # for good, and `active?/1` counts that as in service.
+  #
+  # States are the worker's default (`:successful`) without `:executing`. The retry
+  # queued when the period's invoice is paid is inserted and runs at once, and this
+  # schedules the next day while that job is still executing. Counting `:executing`
+  # drops the insert: the running job conflicts with itself, and when it was the only
+  # one queued the subscription stays past due. A job that is waiting, held or already
+  # finished still keeps the slot, so a second retry is not queued beside it.
   defp schedule_next_retry(%Subscription{} = subscription) do
-    %{subscription_uuid: subscription.uuid}
-    |> __MODULE__.new(schedule_in: 86_400)
+    states = Oban.Job.unique_states(:successful) -- [:executing]
+
+    %{
+      subscription_uuid: subscription.uuid,
+      period_end: DateTime.to_iso8601(subscription.current_period_end)
+    }
+    |> __MODULE__.new(schedule_in: 86_400, unique: [states: states])
     |> Oban.insert()
+    |> case do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Subscription #{subscription.uuid} has no dunning retry queued: #{inspect(reason)}"
+        )
+    end
   end
 
   # ============================================
