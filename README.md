@@ -274,8 +274,8 @@ under `billing.manage_orders`, with an optional reason):
   and marked paid in the same transaction. A payment of that invoice running at
   the same time waits for the reinstate, so the order is paid whichever commits
   first. A full refund that commits first voids the invoice, and the reinstate
-  then confirms the order without paying it; one that waits for the reinstate
-  refunds the order it reinstated.
+  then puts the order back where it was cancelled from, unpaid; one that waits
+  for the reinstate refunds the order it reinstated.
 - The trail is in `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`);
   a reason is also appended to `internal_notes` as `Reinstated <date>: <reason>`.
 - Only a `cancelled` order: anything else returns

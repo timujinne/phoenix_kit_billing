@@ -1,8 +1,9 @@
 defmodule PhoenixKitBilling.ReinstateRaceTest do
   @moduledoc """
   Reinstating a cancelled order against a second reinstate, the trash, and a
-  payment or refund of its invoice, under real concurrency (separate connections, outside the sandbox;
-  `async: false` because it changes the sandbox mode for the run).
+  payment or refund of its invoice, under real concurrency (separate
+  connections, outside the sandbox; `async: false` because it changes the
+  sandbox mode for the run).
 
   Whichever commits first wins and the other waits for it, then decides on
   what it committed: an order is reinstated once, never out of the trash, and an

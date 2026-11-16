@@ -2776,8 +2776,9 @@ defmodule PhoenixKitBilling do
   invoice would have done. A payment of the invoice that runs at the same time
   waits for the order row and sees the reinstated order, so the order is paid
   whichever commits first. A full refund of it that commits first voids the
-  invoice, and the reinstate then confirms the order without paying it; one
-  that waits for the reinstate refunds the order it reinstated.
+  invoice, and the reinstate then puts the order back to the status it was
+  cancelled from, unpaid; one that waits for the reinstate refunds the order it
+  reinstated.
 
   ## Options
 
@@ -2814,11 +2815,7 @@ defmodule PhoenixKitBilling do
         Events.broadcast_order_reinstated(reinstated)
         Enum.each(broadcasts, fn {fun, arg} -> apply(Events, fun, [arg]) end)
 
-        {:ok,
-         case List.last(broadcasts) do
-           {_fun, settled} -> settled
-           nil -> reinstated
-         end}
+        {:ok, settled_order(broadcasts, reinstated)}
 
       error ->
         error
@@ -2859,6 +2856,19 @@ defmodule PhoenixKitBilling do
       |> repo().one()
 
     if paid_invoice, do: maybe_mark_linked_order_paid(paid_invoice), else: []
+  end
+
+  # The order as the reinstate left it: paid, else confirmed, else as it was
+  # reinstated - found by its broadcast, not by where that sits in the list.
+  defp settled_order(broadcasts, reinstated) do
+    Enum.find_value(broadcasts, fn
+      {:broadcast_order_paid, paid} -> paid
+      _other -> nil
+    end) ||
+      Enum.find_value(broadcasts, fn
+        {:broadcast_order_confirmed, confirmed} -> confirmed
+        _other -> nil
+      end) || reinstated
   end
 
   defp put_reason_note(changeset, _label, _notes, nil), do: changeset

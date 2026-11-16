@@ -21,8 +21,9 @@ defmodule PhoenixKitBilling.OrderEvents do
   - `:cancelled` - the order became `"cancelled"`.
   - `:reinstated` - a cancelled order went back to the status it was cancelled
     from (`reinstate_order/3`). When an invoice paid meanwhile settles the order
-    in the same transaction, `:paid` follows. A handler that undid something on
-    `:cancelled` (released stock) takes it up again here.
+    in the same transaction, `:paid` is enqueued after it; the two are separate
+    jobs and may run in either order, so a handler does not rely on it. A handler
+    that undid something on `:cancelled` (released stock) takes it up again here.
 
   A refused transition fires nothing. Neither does moving an order to the trash
   or restoring it, which change no status.
