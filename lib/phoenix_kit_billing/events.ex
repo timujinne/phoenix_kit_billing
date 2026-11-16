@@ -175,9 +175,9 @@ defmodule PhoenixKitBilling.Events do
   end
 
   @doc """
-  Broadcasts order trashed event. Trashing changes nothing else about the
-  order, so it is announced on its own: no `:order_updated` or
-  `:order_cancelled` goes with it.
+  Broadcasts order trashed event. Trashing moves the order's revision and
+  changes nothing else about it, so it is announced on its own: no
+  `:order_updated` or `:order_cancelled` goes with it.
   """
   def broadcast_order_trashed(order) do
     broadcast(@orders_topic, {:order_trashed, order})

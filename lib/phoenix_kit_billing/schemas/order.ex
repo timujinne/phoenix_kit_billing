@@ -782,9 +782,10 @@ defmodule PhoenixKitBilling.Order do
 
   @doc """
   Changeset that moves an order to the trash. `actor_uuid` is the user who does
-  it, or `nil`. It changes nothing else: not the status, not `metadata`, not the
-  revision an external system reads, not `updated_at`. Written here and by `restore_changeset/1`
-  only: `changeset/2` cannot set these fields.
+  it, or `nil`. The revision an external system reads moves on, as `trashed_at`
+  is one of its fields; nothing else changes: not the status, not the rest of
+  `metadata`, not `updated_at`. Written here and by `restore_changeset/1` only:
+  `changeset/2` cannot set these fields.
   """
   def trash_changeset(%__MODULE__{} = order, actor_uuid) do
     order

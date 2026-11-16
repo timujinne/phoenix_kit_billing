@@ -327,11 +327,17 @@ defmodule PhoenixKitBilling.Integration.TrashOrdersTest do
     end
 
     test "updated_at stays what it was", %{user: user, actor: actor} do
+      # Long ago, so a write that stamped it again would show.
+      long_ago = ~U[2020-05-05 10:00:00Z]
       trashed = trashed(user, actor)
 
+      Repo.update_all(from(o in Order, where: o.uuid == ^trashed.uuid),
+        set: [updated_at: long_ago]
+      )
+
       assert {:ok, restored} = Billing.restore_order(trashed)
-      assert restored.updated_at == trashed.updated_at
-      assert stored(trashed).updated_at == trashed.updated_at
+      assert restored.updated_at == long_ago
+      assert stored(trashed).updated_at == long_ago
     end
 
     test "an order that is not in the trash is refused", %{user: user} do

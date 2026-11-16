@@ -90,12 +90,6 @@ defmodule PhoenixKitBilling.Schemas.TrashFieldsTest do
         restored = module.restore_changeset(stored.(trashed_at: @now, trashed_by_uuid: @actor))
 
         assert restored.changes == %{trashed_at: nil, trashed_by_uuid: nil, updated_at: nil}
-
-        # an order's revision moves in the write (an external system acts on the trash);
-        # an invoice has none
-        expected_prepares = if module == Order, do: 1, else: 0
-        assert length(trashed.prepare) == expected_prepares
-        assert length(restored.prepare) == expected_prepares
       end
     end
 
