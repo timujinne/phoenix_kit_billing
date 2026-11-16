@@ -795,7 +795,8 @@ defmodule PhoenixKitBilling.Order do
   end
 
   @doc """
-  Changeset that takes an order out of the trash.
+  Changeset that takes an order out of the trash. Like `trash_changeset/2`, it
+  moves the revision an external system reads and leaves `updated_at` as it was.
   """
   def restore_changeset(%__MODULE__{} = order) do
     order
