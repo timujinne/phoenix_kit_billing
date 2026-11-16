@@ -5361,29 +5361,29 @@ msgstr "Створення..."
 #: lib/phoenix_kit_billing/web/order_detail.ex:293
 #, elixir-autogen, elixir-format
 msgid "Failed to reinstate the order: %{reason}"
-msgstr "Не вдалося повернути замовлення: %{reason}"
+msgstr "Не вдалося поновити замовлення: %{reason}"
 
 #: lib/phoenix_kit_billing/errors.ex:237
 #, elixir-autogen, elixir-format
 msgid "Only a cancelled order can be reinstated."
-msgstr "Повернути можна лише скасоване замовлення."
+msgstr "Поновити можна лише скасоване замовлення."
 
 #: lib/phoenix_kit_billing/web/order_detail.ex:284
 #, elixir-autogen, elixir-format
 msgid "Order reinstated"
-msgstr "Замовлення повернуто"
+msgstr "Замовлення поновлено"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:70
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:436
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:465
 #, elixir-autogen, elixir-format
 msgid "Reinstate order"
-msgstr "Повернути замовлення"
+msgstr "Поновити замовлення"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:438
 #, elixir-autogen, elixir-format
 msgid "Reinstate order %{number}?"
-msgstr "Повернути замовлення %{number}?"
+msgstr "Поновити замовлення %{number}?"
 
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:441
 #, elixir-autogen, elixir-format
@@ -5393,4 +5393,4 @@ msgstr "Замовлення повернеться до статусу, яки�
 #: lib/phoenix_kit_billing/web/order_detail.html.heex:456
 #, elixir-autogen, elixir-format
 msgid "Why is this order being reinstated?"
-msgstr "Чому замовлення повертається?"
+msgstr "Чому замовлення поновлюється?"

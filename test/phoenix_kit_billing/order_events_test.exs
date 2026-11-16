@@ -44,6 +44,11 @@ defmodule PhoenixKitBilling.OrderEventsTest do
     def handle_order_event(_event, _order), do: raise("downstream exploded")
   end
 
+  defmodule PaidOnlyHandler do
+    @moduledoc false
+    def handle_order_event(:paid, _order), do: :ok
+  end
+
   defmodule OddHandler do
     @moduledoc false
     def handle_order_event(_event, _order), do: :whatever
@@ -209,6 +214,55 @@ defmodule PhoenixKitBilling.OrderEventsTest do
     end
   end
 
+  describe "reinstated" do
+    defp events_enqueued, do: Enum.map(jobs(), & &1.args["event"])
+
+    test "reinstate_order/3 enqueues it", %{order: order} do
+      {:ok, cancelled} = Billing.cancel_order(order)
+      Repo.delete_all(Oban.Job)
+
+      {:ok, _} = Billing.reinstate_order(cancelled, "customer called back")
+
+      assert_one_event("reinstated", order)
+    end
+
+    test "cancel, reinstate, cancel: :cancelled twice, :reinstated once", %{order: order} do
+      {:ok, cancelled} = Billing.cancel_order(order)
+      {:ok, reinstated} = Billing.reinstate_order(cancelled)
+      {:ok, _} = Billing.cancel_order(reinstated)
+
+      assert Enum.sort(events_enqueued()) == ["cancelled", "cancelled", "reinstated"]
+      assert jobs() |> Enum.map(& &1.args["event_uuid"]) |> Enum.uniq() |> length() == 3
+    end
+
+    test "an invoice paid meanwhile settles the order: :paid follows", %{order: order} do
+      invoice = invoiced(order)
+      {:ok, cancelled} = Billing.cancel_order(order)
+      {:ok, _} = Billing.mark_invoice_paid(invoice)
+      Repo.delete_all(Oban.Job)
+
+      {:ok, settled} = Billing.reinstate_order(cancelled)
+
+      assert settled.status == "paid"
+      assert Enum.sort(events_enqueued()) == ["paid", "reinstated"]
+    end
+
+    test "a refused reinstate enqueues nothing", %{order: order} do
+      assert {:error, :order_not_reinstatable} = Billing.reinstate_order(order)
+      assert jobs() == []
+    end
+
+    test "a rolled-back reinstate leaves no job", %{order: order} do
+      {:ok, cancelled} = Billing.cancel_order(order)
+      Repo.delete_all(Oban.Job)
+
+      rolled_back(fn -> {:ok, _} = Billing.reinstate_order(cancelled) end)
+
+      assert jobs() == []
+      assert Repo.get!(Order, order.uuid).status == "cancelled"
+    end
+  end
+
   describe "one job per handler" do
     setup do
       Application.put_env(:phoenix_kit_billing, :order_event_handlers, [Handler, FailingHandler])
@@ -312,6 +366,19 @@ defmodule PhoenixKitBilling.OrderEventsTest do
     test "cancel_order/3", %{order: order} do
       assert steps(fn -> Billing.cancel_order(order) end) ==
                [:begin, :order_update, :job_insert, :commit]
+    end
+
+    test "reinstate_order/3", %{order: order} do
+      {:ok, cancelled} = Billing.cancel_order(order)
+
+      steps = steps(fn -> Billing.reinstate_order(cancelled) end)
+
+      assert Enum.take(steps, 1) == [:begin]
+      assert List.last(steps) == :commit
+      assert Enum.count(steps, &(&1 == :commit)) == 1
+
+      assert Enum.find_index(steps, &(&1 == :order_update)) <
+               Enum.find_index(steps, &(&1 == :job_insert))
     end
 
     test "a payment through the invoice: one transaction, ending after the job", %{order: order} do
@@ -548,6 +615,14 @@ defmodule PhoenixKitBilling.OrderEventsTest do
     test "an order that no longer exists is cancelled, not retried forever" do
       assert {:cancel, :order_not_found} =
                perform_job(OrderEventWorker, args(%{uuid: Ecto.UUID.generate()}, Handler))
+    end
+
+    test "a handler with no clause for an event fails the job", %{order: order} do
+      Application.put_env(:phoenix_kit_billing, :order_event_handlers, [PaidOnlyHandler])
+
+      assert_raise FunctionClauseError, fn ->
+        perform_job(OrderEventWorker, args(order, PaidOnlyHandler, "refunded"))
+      end
     end
 
     test "an event this code does not know is cancelled", %{order: order} do

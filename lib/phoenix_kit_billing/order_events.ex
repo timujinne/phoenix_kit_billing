@@ -1,7 +1,7 @@
 defmodule PhoenixKitBilling.OrderEvents do
   @moduledoc """
-  A durable way for OTHER modules to learn that an order was paid, refunded or
-  cancelled.
+  A durable way for OTHER modules to learn that an order was paid, refunded,
+  cancelled or reinstated.
 
   `PhoenixKitBilling.InvoiceEvents` only fires for invoices, and an order can be
   paid without one. The `{:order_paid, order}` PubSub broadcast is a
@@ -19,6 +19,10 @@ defmodule PhoenixKitBilling.OrderEvents do
     partial one leaves the order `"paid"` and fires no order event (the invoice's
     `:refunded` fires for every refund).
   - `:cancelled` - the order became `"cancelled"`.
+  - `:reinstated` - a cancelled order went back to the status it was cancelled
+    from (`reinstate_order/3`). When an invoice paid meanwhile settles the order
+    in the same transaction, `:paid` follows. A handler that undid something on
+    `:cancelled` (released stock) takes it up again here.
 
   A refused transition fires nothing. Neither does moving an order to the trash
   or restoring it, which change no status.
@@ -28,8 +32,14 @@ defmodule PhoenixKitBilling.OrderEvents do
   Export `billing_order_event_handlers/0` from your `PhoenixKit.Module`,
   returning handler modules. Each implements:
 
-      @spec handle_order_event(:paid | :refunded | :cancelled, PhoenixKitBilling.Order.t()) ::
-              :ok | {:error, term()}
+      @spec handle_order_event(
+              :paid | :refunded | :cancelled | :reinstated,
+              PhoenixKitBilling.Order.t()
+            ) :: :ok | {:error, term()}
+
+  End the handler with a catch-all clause (`def handle_order_event(_event,
+  _order), do: :ok`): events are added over time (`:reinstated` was), and a
+  handler with no clause for one fails its job and is retried.
 
   Duck-typed - no compile-time dependency on billing - the same pattern as
   `InvoiceEvents`, so an optional billing integration costs nothing when billing
@@ -46,12 +56,16 @@ defmodule PhoenixKitBilling.OrderEvents do
   - **At-least-once.** A handler must be idempotent. Each job carries an
     `event_uuid`, which Oban uses so an event reaches a handler through one job;
     it does not cover a retry of that job, and it is not passed to the handler.
-    Key a handler's idempotency on the order's uuid and the event instead: an
-    order can reach each of these statuses only once, so that pair identifies
-    the event.
+    The order's uuid and the event do not identify an occurrence either: an
+    order cancelled, reinstated and cancelled again fires `:cancelled` twice
+    (and `:reinstated` once in between). So do not remember "done for (order,
+    event)"; make the effect idempotent against the order's status as the
+    handler reads it (release the stock if the order is cancelled and it is not
+    released yet).
   - The handler receives the order **as it is now** - re-read when the job runs,
     with `:billing_profile` loaded - not a snapshot from when it was enqueued. A
-    `:paid` delivered late can find the order already `"refunded"`.
+    `:paid` delivered late can find the order already `"refunded"`, a
+    `:cancelled` the order already reinstated.
   - A job may only call a handler that is registered *when it runs*: job
     arguments are data, never a license to invoke an arbitrary module.
 
@@ -66,7 +80,7 @@ defmodule PhoenixKitBilling.OrderEvents do
   alias PhoenixKitBilling.Order
   alias PhoenixKitBilling.Workers.OrderEventWorker
 
-  @events [:paid, :refunded, :cancelled]
+  @events [:paid, :refunded, :cancelled, :reinstated]
 
   @doc "The events handlers can receive."
   def events, do: @events

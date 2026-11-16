@@ -167,6 +167,6 @@ defmodule PhoenixKitBilling.Web.ReinstateOrderTest do
       |> put_test_locale("uk")
       |> live("/en/admin/billing/orders/#{order.uuid}")
 
-    assert has_element?(view, "#reinstate-order-button", "Повернути замовлення")
+    assert has_element?(view, "#reinstate-order-button", "Поновити замовлення")
   end
 end

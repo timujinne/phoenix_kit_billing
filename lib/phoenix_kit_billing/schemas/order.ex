@@ -413,7 +413,10 @@ defmodule PhoenixKitBilling.Order do
 
     changeset =
       order
-      |> change(status: to, cancelled_at: nil)
+      |> change(status: to)
+      # Forced: a struct read before the cancellation has `cancelled_at` nil
+      # already, and `change/2` would drop the no-op and leave the stored value.
+      |> force_change(:cancelled_at, nil)
       |> track_revision()
       # After `bump_revision/1` (registered by `track_revision/1`), which keeps
       # the stored trail: this replaces it with the reinstatement's own.
@@ -496,7 +499,7 @@ defmodule PhoenixKitBilling.Order do
 
   # Written only by `cancel_changeset/2` and `reinstate_changeset/3`; kept as
   # stored by every other change.
-  @cancel_metadata_keys ~w(cancelled_from cancelled_by_uuid reinstated)
+  @trail_metadata_keys ~w(cancelled_from cancelled_by_uuid reinstated)
 
   # What an external system reads of an order. `internal_notes` and the frozen
   # `base_*` figures are not among them.
@@ -614,7 +617,7 @@ defmodule PhoenixKitBilling.Order do
     put_change(
       changeset,
       :metadata,
-      metadata |> Map.drop(["sync" | @cancel_metadata_keys]) |> Map.put("revision", 1)
+      metadata |> Map.drop(["sync" | @trail_metadata_keys]) |> Map.put("revision", 1)
     )
   end
 
@@ -629,7 +632,7 @@ defmodule PhoenixKitBilling.Order do
   defp keep_owned_metadata(changeset) do
     case fetch_change(changeset, :metadata) do
       {:ok, %{} = metadata} ->
-        kept = @owned_metadata_keys ++ @cancel_metadata_keys
+        kept = @owned_metadata_keys ++ @trail_metadata_keys
         owned = Map.take(changeset.data.metadata || %{}, kept)
 
         put_change(changeset, :metadata, metadata |> Map.drop(kept) |> Map.merge(owned))
@@ -667,13 +670,13 @@ defmodule PhoenixKitBilling.Order do
 
     owned =
       stored
-      |> Map.take(["sync" | @cancel_metadata_keys])
+      |> Map.take(["sync" | @trail_metadata_keys])
       |> Map.put("revision", revision_of(stored) + 1)
 
     put_change(
       changeset,
       :metadata,
-      base |> Map.drop(@owned_metadata_keys ++ @cancel_metadata_keys) |> Map.merge(owned)
+      base |> Map.drop(@owned_metadata_keys ++ @trail_metadata_keys) |> Map.merge(owned)
     )
   end
 

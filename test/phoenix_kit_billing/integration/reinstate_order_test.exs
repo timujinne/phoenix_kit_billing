@@ -58,6 +58,14 @@ defmodule PhoenixKitBilling.Integration.ReinstateOrderTest do
     sent
   end
 
+  defp received_events(acc \\ []) do
+    receive do
+      {event, %Order{}} = message when is_atom(event) -> received_events([message | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
   defp flush_events do
     receive do
       {_event, %Order{}} -> flush_events()
@@ -181,6 +189,41 @@ defmodule PhoenixKitBilling.Integration.ReinstateOrderTest do
       assert updated.metadata["reinstated"] == trail
     end
 
+    test "the trail cannot be forged through create_order/2 either", %{user: user} do
+      forged = %{"status" => "x", "reason" => "forged", "by_uuid" => "nobody", "at" => "never"}
+
+      order =
+        create_order(user, %{
+          "metadata" => %{"reinstated" => forged, "cancelled_from" => "confirmed", "keep" => 1}
+        })
+
+      assert order.metadata["reinstated"] == nil
+      assert order.metadata["cancelled_from"] == nil
+      assert order.metadata["keep"] == 1
+
+      stored = Billing.get_order!(order.uuid)
+      assert stored.metadata["reinstated"] == nil
+      assert stored.metadata["cancelled_from"] == nil
+    end
+
+    test "a long reason is cut like the void and cancel reasons", %{user: user} do
+      cancelled = cancelled_from(user, "draft")
+      max = Billing.reason_max_length()
+
+      assert {:ok, reinstated} =
+               Billing.reinstate_order(cancelled, String.duplicate("é", max + 50))
+
+      assert String.length(reinstated.metadata["reinstated"]["reason"]) == max
+
+      [_, reason] =
+        reinstated.internal_notes
+        |> String.split("\n\n")
+        |> List.last()
+        |> String.split(" UTC: ", parts: 2)
+
+      assert String.length(reason) == max
+    end
+
     test "can be cancelled and reinstated again", %{user: user} do
       {:ok, once} = Billing.reinstate_order(cancelled_from(user, "pending"), "first")
       {:ok, cancelled_again} = Billing.cancel_order(once, "second")
@@ -189,6 +232,22 @@ defmodule PhoenixKitBilling.Integration.ReinstateOrderTest do
       assert {:ok, twice} = Billing.reinstate_order(cancelled_again, "third")
       assert twice.status == "pending"
       assert twice.metadata["reinstated"]["reason"] == "third"
+    end
+
+    test "clears cancelled_at on the stored row for a struct read before the cancel", %{
+      user: user
+    } do
+      {:ok, confirmed} = Billing.confirm_order(create_order(user))
+      assert confirmed.cancelled_at == nil
+      {:ok, cancelled} = Billing.cancel_order(confirmed)
+      assert %DateTime{} = Billing.get_order!(cancelled.uuid).cancelled_at
+
+      assert {:ok, reinstated} = Billing.reinstate_order(confirmed)
+
+      assert reinstated.cancelled_at == nil
+      stored = Billing.get_order!(cancelled.uuid)
+      assert stored.status == "confirmed"
+      assert stored.cancelled_at == nil
     end
 
     test "decides on the stored status, not the stale struct's", %{user: user} do
@@ -344,6 +403,30 @@ defmodule PhoenixKitBilling.Integration.ReinstateOrderTest do
       uuid = reinstated.uuid
       assert_receive {:order_reinstated, %Order{uuid: ^uuid, status: "confirmed"}}
       assert_receive {:order_paid, %Order{uuid: ^uuid, status: "paid"}}
+    end
+
+    for status <- ~w(pending draft) do
+      test "an order cancelled from #{status}: :order_confirmed, then :order_paid", %{user: user} do
+        order =
+          if unquote(status) == "pending",
+            do: create_order(user, %{"status" => "pending"}),
+            else: create_order(user)
+
+        invoice = sent_invoice_for(order)
+        cancelled = cancel(order)
+        {:ok, _} = Billing.mark_invoice_paid(invoice)
+        flush_events()
+
+        {:ok, settled} = Billing.reinstate_order(cancelled)
+        assert settled.status == "paid"
+
+        # Each goes out on the orders topic and the user's, so twice.
+        assert [
+                 {:order_reinstated, %Order{status: unquote(status)}},
+                 {:order_confirmed, %Order{status: "confirmed"}},
+                 {:order_paid, %Order{status: "paid"}}
+               ] = received_events() |> Enum.dedup_by(&elem(&1, 0))
+      end
     end
 
     test "a refusal announces nothing", %{user: user} do

@@ -222,15 +222,17 @@ that changed the record, so it commits with the change or not at all.
 | Module | Events | Module callback | Handler function | Host config |
 |---|---|---|---|---|
 | `PhoenixKitBilling.InvoiceEvents` | `:paid`, `:refunded`, `:voided` | `billing_invoice_event_handlers/0` | `handle_invoice_event/2` | `:invoice_event_handlers` |
-| `PhoenixKitBilling.OrderEvents` | `:paid`, `:refunded`, `:cancelled` | `billing_order_event_handlers/0` | `handle_order_event/2` | `:order_event_handlers` |
+| `PhoenixKitBilling.OrderEvents` | `:paid`, `:refunded`, `:cancelled`, `:reinstated` | `billing_order_event_handlers/0` | `handle_order_event/2` | `:order_event_handlers` |
 
 ```elixir
 # In your PhoenixKit.Module
 def billing_order_event_handlers, do: [MyApp.OrderHandler]
 
 defmodule MyApp.OrderHandler do
-  @spec handle_order_event(:paid | :refunded | :cancelled, PhoenixKitBilling.Order.t()) ::
-          :ok | {:error, term()}
+  @spec handle_order_event(
+          :paid | :refunded | :cancelled | :reinstated,
+          PhoenixKitBilling.Order.t()
+        ) :: :ok | {:error, term()}
   def handle_order_event(:paid, order), do: MyApp.Warehouse.write_off(order)
   def handle_order_event(_event, _order), do: :ok
 end
@@ -239,8 +241,9 @@ end
 Or from the host: `config :phoenix_kit_billing, order_event_handlers: [MyApp.OrderHandler]`.
 
 - Delivery is **at-least-once**, so a handler must be idempotent. It is not handed
-  the job's `event_uuid`: key on the order's uuid and the event, which is safe
-  because an order reaches each of these statuses only once.
+  the job's `event_uuid`, and (order, event) is not one occurrence: an order
+  cancelled, reinstated and cancelled again fires `:cancelled` twice. Make the
+  effect idempotent against the order's status instead.
 - The handler gets the order **as it is now**, re-read when the job runs.
 - `{:error, _}` or a raise retries, up to 20 attempts. A job whose handler is no
   longer registered, or whose order is gone, is cancelled.
@@ -268,15 +271,19 @@ under `billing.manage_orders`, with an optional reason):
   an order cancelled before that was recorded). `cancelled_at` is cleared and the
   revision moves on, so an external system takes the order again.
 - If one of its invoices was paid while it was cancelled, the order is confirmed
-  and marked paid in the same transaction. A payment or refund of that invoice running at the same time waits for
-  the reinstate, so the order ends up paid (or refunded) whichever commits first.
+  and marked paid in the same transaction. A payment of that invoice running at
+  the same time waits for the reinstate, so the order is paid whichever commits
+  first. A full refund that commits first voids the invoice, and the reinstate
+  then confirms the order without paying it; one that waits for the reinstate
+  refunds the order it reinstated.
 - The trail is in `metadata["reinstated"]` (`status`, `reason`, `by_uuid`, `at`);
   a reason is also appended to `internal_notes` as `Reinstated <date>: <reason>`.
 - Only a `cancelled` order: anything else returns
   `{:error, :order_not_reinstatable}` (`refunded` is final). An order in the trash
   returns `{:error, :order_trashed}` - restore it first.
-- Broadcasts `{:order_reinstated, order}` (then `:order_confirmed` /
-  `:order_paid` when a paid invoice settled it). No durable event is enqueued.
+- Enqueues the durable `:reinstated` order event (and `:paid` after it when a
+  paid invoice settled the order), then broadcasts `{:order_reinstated, order}`
+  (and `:order_confirmed` / `:order_paid` for the settlement).
 
 ### Trash
 
