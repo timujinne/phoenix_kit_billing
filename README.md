@@ -292,7 +292,8 @@ Orders and draft invoices are not deleted from the admin: they go to a trash
 Nothing empties it.
 
 ```elixir
-{:ok, order} = PhoenixKitBilling.trash_order(order, actor_uuid: admin.uuid, reason: "Created by mistake")
+{:ok, order} =
+  PhoenixKitBilling.trash_order(order, actor_uuid: admin.uuid, reason: "Created by mistake")
 {:ok, order} = PhoenixKitBilling.restore_order(order)
 
 {:ok, invoice} = PhoenixKitBilling.trash_invoice(invoice, actor_uuid: admin.uuid)
@@ -316,6 +317,8 @@ PhoenixKitBilling.list_orders(%{trashed: :only})    # :include for both
   it was before the trash.
 - Trashing and restoring leave `updated_at` as it was. They move an order's revision,
   so an external system that holds it (`sync` back to `pending`) takes it again.
+- `trash_order/2` takes an optional `:reason` (trimmed, cut like the cancel reason),
+  appended to the order's `internal_notes` as `Trashed <date>: <reason>`.
 - Restoring a trashed draft invoice puts back its old figures. If the order's
   lines changed meanwhile, the invoice no longer matches them: check it before
   sending.

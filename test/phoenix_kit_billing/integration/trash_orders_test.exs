@@ -99,12 +99,15 @@ defmodule PhoenixKitBilling.Integration.TrashOrdersTest do
     end
 
     test "updated_at stays what it was", %{user: user, actor: actor} do
+      # Long ago, so a write that stamped it again would show.
+      long_ago = ~U[2020-05-05 10:00:00Z]
       order = create_order(user)
+      Repo.update_all(from(o in Order, where: o.uuid == ^order.uuid), set: [updated_at: long_ago])
 
       assert {:ok, trashed} = Billing.trash_order(order, actor_uuid: actor, reason: "Duplicate")
 
-      assert trashed.updated_at == order.updated_at
-      assert stored(order).updated_at == order.updated_at
+      assert trashed.updated_at == long_ago
+      assert stored(order).updated_at == long_ago
     end
 
     test "a reason is appended to the stored internal notes", %{user: user, actor: actor} do
